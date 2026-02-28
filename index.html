@@ -1,0 +1,1064 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Decoding Wall Street — Finnhub NLP Analysis</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,700&family=Playfair+Display:ital,wght@0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-primary: #0a0f1c;
+  --bg-card: #111827;
+  --bg-card-hover: #1a2234;
+  --border: #1e293b;
+  --accent: #00d4aa;
+  --accent-dim: rgba(0, 212, 170, 0.1);
+  --accent-glow: rgba(0, 212, 170, 0.3);
+  --red: #ff6b6b;
+  --red-dim: rgba(255, 107, 107, 0.1);
+  --gold: #fbbf24;
+  --gold-dim: rgba(251, 191, 36, 0.1);
+  --blue: #60a5fa;
+  --blue-dim: rgba(96, 165, 250, 0.1);
+  --purple: #a78bfa;
+  --purple-dim: rgba(167, 139, 250, 0.1);
+  --text: #e2e8f0;
+  --text-muted: #64748b;
+  --text-dim: #475569;
+  --font-display: 'Playfair Display', Georgia, serif;
+  --font-body: 'DM Sans', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg-primary);
+  color: var(--text);
+  font-family: var(--font-body);
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+/* Noise texture overlay */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 0;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+  position: relative;
+  z-index: 1;
+}
+
+/* ── HERO ── */
+.hero {
+  padding: 80px 0 60px;
+  text-align: center;
+  position: relative;
+}
+
+.hero::before {
+  content: '';
+  position: absolute;
+  top: -100px; left: 50%;
+  transform: translateX(-50%);
+  width: 600px; height: 600px;
+  background: radial-gradient(circle, rgba(0, 212, 170, 0.08) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: var(--accent-dim);
+  border: 1px solid rgba(0, 212, 170, 0.2);
+  border-radius: 100px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--accent);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-bottom: 24px;
+  animation: fadeDown 0.6s ease;
+}
+
+.hero-badge::before {
+  content: '';
+  width: 6px; height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+
+.hero h1 {
+  font-family: var(--font-display);
+  font-size: clamp(40px, 6vw, 72px);
+  font-weight: 700;
+  line-height: 1.1;
+  margin-bottom: 16px;
+  animation: fadeDown 0.6s ease 0.1s both;
+}
+
+.hero h1 .highlight {
+  background: linear-gradient(135deg, var(--accent), #00f0c0);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hero .subtitle {
+  font-size: 18px;
+  color: var(--text-muted);
+  max-width: 600px;
+  margin: 0 auto 40px;
+  animation: fadeDown 0.6s ease 0.2s both;
+}
+
+/* ── STAT TICKER ── */
+.stat-ticker {
+  display: flex;
+  justify-content: center;
+  gap: 48px;
+  flex-wrap: wrap;
+  animation: fadeDown 0.6s ease 0.3s both;
+}
+
+.stat-item {
+  text-align: center;
+}
+
+.stat-number {
+  font-family: var(--font-mono);
+  font-size: 36px;
+  font-weight: 500;
+  color: var(--accent);
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  margin-top: 4px;
+}
+
+/* ── SECTION HEADERS ── */
+.section {
+  padding: 60px 0;
+}
+
+.section-header {
+  margin-bottom: 32px;
+}
+
+.section-tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  margin-bottom: 8px;
+}
+
+.section-title {
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 700;
+}
+
+.section-subtitle {
+  color: var(--text-muted);
+  margin-top: 8px;
+  font-size: 15px;
+}
+
+/* ── CARDS ── */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px;
+  transition: all 0.3s ease;
+}
+
+.card:hover {
+  background: var(--bg-card-hover);
+  border-color: rgba(0, 212, 170, 0.2);
+  transform: translateY(-2px);
+}
+
+/* ── PIPELINE ── */
+.pipeline-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.pipeline-step {
+  position: relative;
+}
+
+.pipeline-step .step-num {
+  font-family: var(--font-mono);
+  font-size: 48px;
+  font-weight: 500;
+  color: var(--border);
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.pipeline-step h3 {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.pipeline-step p {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.pipeline-step .tech-tag {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 8px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-radius: 4px;
+  margin-top: 12px;
+  margin-right: 4px;
+}
+
+/* ── SENTIMENT ── */
+.sentiment-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+.sentiment-breakdown {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.sent-chip {
+  flex: 1;
+  padding: 20px;
+  border-radius: 10px;
+  text-align: center;
+}
+
+.sent-chip.positive { background: rgba(0, 212, 170, 0.08); border: 1px solid rgba(0, 212, 170, 0.15); }
+.sent-chip.neutral { background: rgba(100, 116, 139, 0.1); border: 1px solid rgba(100, 116, 139, 0.15); }
+.sent-chip.negative { background: var(--red-dim); border: 1px solid rgba(255, 107, 107, 0.15); }
+
+.sent-chip .pct {
+  font-family: var(--font-mono);
+  font-size: 28px;
+  font-weight: 500;
+}
+
+.sent-chip.positive .pct { color: var(--accent); }
+.sent-chip.neutral .pct { color: var(--text-muted); }
+.sent-chip.negative .pct { color: var(--red); }
+
+.sent-chip .lbl {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-top: 4px;
+}
+
+/* Company bars */
+.company-bar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  gap: 12px;
+}
+
+.company-bar .ticker {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  width: 48px;
+  text-align: right;
+  color: var(--text-muted);
+}
+
+.company-bar .bar-track {
+  flex: 1;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+.company-bar .bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent), #00f0c0);
+  transition: width 1.5s cubic-bezier(0.22, 1, 0.36, 1);
+  width: 0;
+}
+
+.company-bar .bar-fill.negative {
+  background: linear-gradient(90deg, var(--red), #ff9b9b);
+}
+
+.company-bar .val {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  width: 40px;
+  color: var(--text-dim);
+}
+
+/* ── TOPICS ── */
+.topic-cards {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+}
+
+.topic-card {
+  padding: 20px 16px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.topic-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+}
+
+.topic-card:nth-child(1)::before { background: var(--blue); }
+.topic-card:nth-child(2)::before { background: var(--red); }
+.topic-card:nth-child(3)::before { background: var(--accent); }
+.topic-card:nth-child(4)::before { background: var(--gold); }
+.topic-card:nth-child(5)::before { background: var(--purple); }
+
+.topic-id {
+  font-family: var(--font-mono);
+  font-size: 24px;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.topic-card:nth-child(1) .topic-id { color: var(--blue); }
+.topic-card:nth-child(2) .topic-id { color: var(--red); }
+.topic-card:nth-child(3) .topic-id { color: var(--accent); }
+.topic-card:nth-child(4) .topic-id { color: var(--gold); }
+.topic-card:nth-child(5) .topic-id { color: var(--purple); }
+
+.topic-pct {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.topic-name {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.topic-words {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-style: italic;
+  line-height: 1.4;
+}
+
+/* ── TRENDS ── */
+.trends-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.trend-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+
+.trend-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.trend-arrow {
+  font-size: 20px;
+  width: 36px; height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+}
+
+.trend-arrow.up { background: var(--accent-dim); color: var(--accent); }
+.trend-arrow.down { background: var(--red-dim); color: var(--red); }
+
+.trend-topic {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.trend-note {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.trend-stat {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.trend-stat.up { color: var(--accent); }
+.trend-stat.down { color: var(--red); }
+
+/* ── CORRELATIONS ── */
+.corr-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+.corr-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.corr-item:last-child { border-bottom: none; }
+
+.corr-label { font-size: 14px; }
+
+.corr-value {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.corr-value.pos { color: var(--accent); }
+.corr-value.neg { color: var(--red); }
+
+/* Visual bar behind correlation */
+.corr-bar-wrap {
+  flex: 1;
+  margin: 0 16px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.corr-bar-center {
+  position: absolute;
+  left: 50%; top: 0; bottom: 0;
+  width: 1px;
+  background: var(--text-dim);
+}
+
+.corr-bar-fill {
+  position: absolute;
+  top: 0; bottom: 0;
+  border-radius: 3px;
+  transition: all 1.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.corr-bar-fill.pos {
+  left: 50%;
+  background: var(--accent);
+}
+
+.corr-bar-fill.neg {
+  right: 50%;
+  background: var(--red);
+}
+
+/* ── TAKEAWAYS ── */
+.takeaways-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+
+.takeaway-card {
+  position: relative;
+  padding-top: 4px;
+}
+
+.takeaway-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 28px; right: 28px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.takeaway-card:nth-child(1)::before { background: var(--accent); }
+.takeaway-card:nth-child(2)::before { background: var(--blue); }
+.takeaway-card:nth-child(3)::before { background: var(--gold); }
+
+.takeaway-num {
+  font-family: var(--font-mono);
+  font-size: 48px;
+  color: var(--border);
+  line-height: 1;
+  margin-bottom: 8px;
+}
+
+.takeaway-card h3 {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.takeaway-card p {
+  font-size: 14px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.takeaway-stat {
+  font-family: var(--font-mono);
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-top: 12px;
+}
+
+.takeaway-card:nth-child(1) .takeaway-stat { background: var(--accent-dim); color: var(--accent); }
+.takeaway-card:nth-child(2) .takeaway-stat { background: var(--blue-dim); color: var(--blue); }
+.takeaway-card:nth-child(3) .takeaway-stat { background: var(--gold-dim); color: var(--gold); }
+
+/* ── BOTTOM LINE ── */
+.bottom-line {
+  margin-top: 40px;
+  padding: 32px;
+  background: linear-gradient(135deg, rgba(0, 212, 170, 0.05), rgba(96, 165, 250, 0.05));
+  border: 1px solid rgba(0, 212, 170, 0.15);
+  border-radius: 12px;
+  text-align: center;
+}
+
+.bottom-line .bl-tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  margin-bottom: 12px;
+}
+
+.bottom-line p {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.5;
+  max-width: 700px;
+  margin: 0 auto;
+}
+
+.bottom-line .hl { color: var(--accent); }
+
+/* ── TECH STACK ── */
+.tech-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.tech-pill {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  color: var(--text-muted);
+  transition: all 0.3s ease;
+}
+
+.tech-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── FOOTER ── */
+.footer {
+  padding: 40px 0;
+  text-align: center;
+  border-top: 1px solid var(--border);
+  margin-top: 40px;
+}
+
+.footer p {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.footer a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+/* ── ANIMATIONS ── */
+@keyframes fadeDown {
+  from { opacity: 0; transform: translateY(-16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.animate-in {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: all 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.animate-in.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ── RESPONSIVE ── */
+@media (max-width: 900px) {
+  .pipeline-grid { grid-template-columns: repeat(2, 1fr); }
+  .topic-cards { grid-template-columns: repeat(3, 1fr); }
+  .sentiment-grid { grid-template-columns: 1fr; }
+  .corr-grid { grid-template-columns: 1fr; }
+  .trends-grid { grid-template-columns: 1fr; }
+  .takeaways-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 600px) {
+  .pipeline-grid { grid-template-columns: 1fr; }
+  .topic-cards { grid-template-columns: repeat(2, 1fr); }
+  .stat-ticker { gap: 24px; }
+  .sentiment-breakdown { flex-direction: column; }
+}
+
+.divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border), transparent);
+  margin: 0;
+}
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-badge">NLP × Finance</div>
+    <h1>Decoding <span class="highlight">Wall Street</span></h1>
+    <p class="subtitle">How 40,000 news headlines reveal sentiment patterns, topic structure, and market signals across America's biggest companies.</p>
+    <div class="stat-ticker">
+      <div class="stat-item"><div class="stat-number" data-count="40112">0</div><div class="stat-label">Articles</div></div>
+      <div class="stat-item"><div class="stat-number" data-count="15">0</div><div class="stat-label">Companies</div></div>
+      <div class="stat-item"><div class="stat-number" data-count="5">0</div><div class="stat-label">Sectors</div></div>
+      <div class="stat-item"><div class="stat-number" data-count="12">0</div><div class="stat-label">Months</div></div>
+      <div class="stat-item"><div class="stat-number" data-count="5">0</div><div class="stat-label">LDA Topics</div></div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- PIPELINE -->
+<section class="section">
+  <div class="container">
+    <div class="section-header animate-in">
+      <div class="section-tag">Methodology</div>
+      <div class="section-title">From Raw API Data to Insight</div>
+      <div class="section-subtitle">A four-stage NLP pipeline built on Finnhub's financial news API</div>
+    </div>
+    <div class="pipeline-grid">
+      <div class="card pipeline-step animate-in">
+        <div class="step-num">01</div>
+        <h3>Collect</h3>
+        <p>40,112 articles via Finnhub API across 15 companies in Technology, Finance, Healthcare, Consumer, and Industrial sectors.</p>
+        <span class="tech-tag">Finnhub API</span><span class="tech-tag">Python</span>
+      </div>
+      <div class="card pipeline-step animate-in">
+        <div class="step-num">02</div>
+        <h3>Clean</h3>
+        <p>Regex normalization, stopword removal (ISO + finance-specific), WordNet lemmatization. TF-IDF feature extraction per sector.</p>
+        <span class="tech-tag">NLTK</span><span class="tech-tag">scikit-learn</span>
+      </div>
+      <div class="card pipeline-step animate-in">
+        <div class="step-num">03</div>
+        <h3>Analyze</h3>
+        <p>Dual sentiment scoring with VADER and TextBlob. LDA topic modeling with 5 topics, 500 iterations on 39,293 documents.</p>
+        <span class="tech-tag">VADER</span><span class="tech-tag">TextBlob</span><span class="tech-tag">LDA</span>
+      </div>
+      <div class="card pipeline-step animate-in">
+        <div class="step-num">04</div>
+        <h3>Connect</h3>
+        <p>OLS regression linking sentiment and topic features to monthly stock returns and quarterly earnings surprises.</p>
+        <span class="tech-tag">statsmodels</span><span class="tech-tag">OLS</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- SENTIMENT -->
+<section class="section">
+  <div class="container">
+    <div class="section-header animate-in">
+      <div class="section-tag">Sentiment Analysis</div>
+      <div class="section-title">The Mood of the Market</div>
+      <div class="section-subtitle">VADER compound scores reveal a slightly optimistic financial media — and meaningful variation across companies</div>
+    </div>
+    <div class="sentiment-breakdown animate-in">
+      <div class="sent-chip positive"><div class="pct">39.9%</div><div class="lbl">Positive</div></div>
+      <div class="sent-chip neutral"><div class="pct">42.6%</div><div class="lbl">Neutral</div></div>
+      <div class="sent-chip negative"><div class="pct">17.4%</div><div class="lbl">Negative</div></div>
+    </div>
+    <div class="sentiment-grid">
+      <div class="card animate-in">
+        <h3 style="font-size:14px; margin-bottom:16px; color:var(--text-muted);">Average VADER Sentiment by Company</h3>
+        <div id="company-bars"></div>
+      </div>
+      <div class="card animate-in">
+        <h3 style="font-size:14px; margin-bottom:16px; color:var(--text-muted);">Key Sentiment Insights</h3>
+        <div style="display:flex; flex-direction:column; gap:16px;">
+          <div style="padding:16px; background:var(--accent-dim); border-radius:8px;">
+            <div style="font-family:var(--font-mono); font-size:20px; color:var(--accent); margin-bottom:4px;">r = 0.37</div>
+            <div style="font-size:13px; color:var(--text-muted);">VADER vs TextBlob correlation — moderate agreement confirms they capture different dimensions of sentiment</div>
+          </div>
+          <div style="padding:16px; background:var(--blue-dim); border-radius:8px;">
+            <div style="font-family:var(--font-mono); font-size:20px; color:var(--blue); margin-bottom:4px;">0.105</div>
+            <div style="font-size:13px; color:var(--text-muted);">Overall mean VADER compound — slight positive skew typical of financial news media</div>
+          </div>
+          <div style="padding:16px; background:var(--gold-dim); border-radius:8px;">
+            <div style="font-family:var(--font-mono); font-size:20px; color:var(--gold); margin-bottom:4px;">AMZN → AAPL</div>
+            <div style="font-size:13px; color:var(--text-muted);">Most positive (0.146) to least positive (0.073) — wide 2× range across companies</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- TOPICS -->
+<section class="section">
+  <div class="container">
+    <div class="section-header animate-in">
+      <div class="section-tag">Topic Modeling</div>
+      <div class="section-title">What Wall Street Talks About</div>
+      <div class="section-subtitle">LDA uncovered 5 interpretable topics that map cleanly to real business domains</div>
+    </div>
+    <div class="topic-cards animate-in">
+      <div class="card topic-card">
+        <div class="topic-id">T0</div>
+        <div class="topic-pct">15.5%</div>
+        <div class="topic-name">Corporate / Retail</div>
+        <div class="topic-words">johnson, walmart, amazon, launch, business, service</div>
+      </div>
+      <div class="card topic-card">
+        <div class="topic-id">T1</div>
+        <div class="topic-pct">16.5%</div>
+        <div class="topic-name">Political / Trade</div>
+        <div class="topic-words">trump, boeing, tariff, president, deal, trade</div>
+      </div>
+      <div class="card topic-card">
+        <div class="topic-id">T2</div>
+        <div class="topic-pct">23.2%</div>
+        <div class="topic-name">Market / Trading</div>
+        <div class="topic-words">earnings, dow, wall street, S&P, trading, investor</div>
+      </div>
+      <div class="card topic-card">
+        <div class="topic-id">T3</div>
+        <div class="topic-pct">24.8%</div>
+        <div class="topic-name">Banking / Investment</div>
+        <div class="topic-words">dividend, bank, fund, goldman, sachs, portfolio</div>
+      </div>
+      <div class="card topic-card">
+        <div class="topic-id">T4</div>
+        <div class="topic-pct">20.1%</div>
+        <div class="topic-name">Big Tech / AI</div>
+        <div class="topic-words">nvidia, meta, apple, alphabet, chip, intelligence</div>
+      </div>
+    </div>
+
+    <!-- Topic Trends -->
+    <div style="margin-top:32px;">
+      <h3 style="font-size:14px; color:var(--text-muted); margin-bottom:16px;" class="animate-in">The Shifting Narrative — Topic Trends Over 12 Months <span style="font-family:var(--font-mono); color:var(--accent); font-size:11px;">all p &lt; 0.001</span></h3>
+      <div class="trends-grid">
+        <div class="card trend-row animate-in">
+          <div class="trend-left">
+            <div class="trend-arrow up">↑</div>
+            <div><div class="trend-topic">Earnings / Market</div><div class="trend-note">Growing investor focus</div></div>
+          </div>
+          <div class="trend-stat up">+0.5%/mo</div>
+        </div>
+        <div class="card trend-row animate-in">
+          <div class="trend-left">
+            <div class="trend-arrow up">↑</div>
+            <div><div class="trend-topic">Big Tech / AI</div><div class="trend-note">AI narrative acceleration</div></div>
+          </div>
+          <div class="trend-stat up">+0.5%/mo</div>
+        </div>
+        <div class="card trend-row animate-in">
+          <div class="trend-left">
+            <div class="trend-arrow down">↓</div>
+            <div><div class="trend-topic">Political / Trade</div><div class="trend-note">Tariff fatigue setting in</div></div>
+          </div>
+          <div class="trend-stat down">−0.7%/mo</div>
+        </div>
+        <div class="card trend-row animate-in">
+          <div class="trend-left">
+            <div class="trend-arrow down">↓</div>
+            <div><div class="trend-topic">Banking / Investment</div><div class="trend-note">Declining from dominant position</div></div>
+          </div>
+          <div class="trend-stat down">−0.3%/mo</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- MARKET IMPACT -->
+<section class="section">
+  <div class="container">
+    <div class="section-header animate-in">
+      <div class="section-tag">Market Impact</div>
+      <div class="section-title">Connecting News to Returns</div>
+      <div class="section-subtitle">Topic probabilities are stronger return predictors than sentiment scores alone</div>
+    </div>
+    <div class="corr-grid">
+      <div class="card animate-in">
+        <h3 style="font-size:14px; margin-bottom:20px; color:var(--text-muted);">Positive Correlations with Monthly Returns</h3>
+        <div class="corr-item">
+          <span class="corr-label">Banking / Investment Topic</span>
+          <div class="corr-bar-wrap"><div class="corr-bar-center"></div><div class="corr-bar-fill pos" data-width="90%"></div></div>
+          <span class="corr-value pos">0.90</span>
+        </div>
+        <div class="corr-item">
+          <span class="corr-label">Earnings / Trading Topic</span>
+          <div class="corr-bar-wrap"><div class="corr-bar-center"></div><div class="corr-bar-fill pos" data-width="84%"></div></div>
+          <span class="corr-value pos">0.84</span>
+        </div>
+        <div class="corr-item">
+          <span class="corr-label">% Positive Headlines</span>
+          <div class="corr-bar-wrap"><div class="corr-bar-center"></div><div class="corr-bar-fill pos" data-width="82%"></div></div>
+          <span class="corr-value pos">0.82</span>
+        </div>
+        <div class="corr-item">
+          <span class="corr-label">VADER Mean Sentiment</span>
+          <div class="corr-bar-wrap"><div class="corr-bar-center"></div><div class="corr-bar-fill pos" data-width="51%"></div></div>
+          <span class="corr-value pos">0.51</span>
+        </div>
+      </div>
+      <div class="card animate-in">
+        <h3 style="font-size:14px; margin-bottom:20px; color:var(--text-muted);">Negative Correlations with Monthly Returns</h3>
+        <div class="corr-item">
+          <span class="corr-label">Market / Wall Street Topic</span>
+          <div class="corr-bar-wrap"><div class="corr-bar-center"></div><div class="corr-bar-fill neg" data-width="83%"></div></div>
+          <span class="corr-value neg">−0.83</span>
+        </div>
+        <div class="corr-item">
+          <span class="corr-label">Political / Trade Topic</span>
+          <div class="corr-bar-wrap"><div class="corr-bar-center"></div><div class="corr-bar-fill neg" data-width="67%"></div></div>
+          <span class="corr-value neg">−0.67</span>
+        </div>
+        <div class="corr-item">
+          <span class="corr-label">Big Tech / AI Topic</span>
+          <div class="corr-bar-wrap"><div class="corr-bar-center"></div><div class="corr-bar-fill neg" data-width="67%"></div></div>
+          <span class="corr-value neg">−0.67</span>
+        </div>
+        <div class="corr-item">
+          <span class="corr-label">Volatility</span>
+          <div class="corr-bar-wrap"><div class="corr-bar-center"></div><div class="corr-bar-fill neg" data-width="51%"></div></div>
+          <span class="corr-value neg">−0.51</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- TAKEAWAYS -->
+<section class="section">
+  <div class="container">
+    <div class="section-header animate-in">
+      <div class="section-tag">Conclusions</div>
+      <div class="section-title">Key Takeaways</div>
+    </div>
+    <div class="takeaways-grid">
+      <div class="card takeaway-card animate-in">
+        <div class="takeaway-num">01</div>
+        <h3>Sentiment Signals Are Real</h3>
+        <p>Positive headlines genuinely correlate with higher stock returns. Financial news isn't just noise — it captures market psychology.</p>
+        <span class="takeaway-stat">r = 0.82 (% positive → returns)</span>
+      </div>
+      <div class="card takeaway-card animate-in">
+        <div class="takeaway-num">02</div>
+        <h3>Topics Predict More Than Tone</h3>
+        <p>Topic modeling outperforms sentiment as a return predictor. What news covers matters more than whether it sounds positive or negative.</p>
+        <span class="takeaway-stat">r = 0.90 (banking topic → returns)</span>
+      </div>
+      <div class="card takeaway-card animate-in">
+        <div class="takeaway-num">03</div>
+        <h3>News Reacts, Doesn't Predict</h3>
+        <p>Pre-earnings sentiment has near-zero predictive power. Markets are efficient — the earnings surprise is truly surprising.</p>
+        <span class="takeaway-stat">r = −0.09 (pre-earnings → surprise)</span>
+      </div>
+    </div>
+
+    <div class="bottom-line animate-in">
+      <div class="bl-tag">Bottom Line</div>
+      <p>NLP reveals meaningful structure in financial news. <span class="hl">Topic modeling outperforms sentiment analysis</span> as a signal for stock returns.</p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- TECH STACK -->
+<section class="section">
+  <div class="container" style="text-align:center;">
+    <div class="section-header animate-in" style="text-align:center;">
+      <div class="section-tag">Tools & Techniques</div>
+    </div>
+    <div class="tech-grid animate-in">
+      <span class="tech-pill">Finnhub API</span>
+      <span class="tech-pill">Python</span>
+      <span class="tech-pill">VADER</span>
+      <span class="tech-pill">TextBlob</span>
+      <span class="tech-pill">LDA</span>
+      <span class="tech-pill">TF-IDF</span>
+      <span class="tech-pill">scikit-learn</span>
+      <span class="tech-pill">statsmodels</span>
+      <span class="tech-pill">OLS Regression</span>
+      <span class="tech-pill">Mixed Effects Model</span>
+      <span class="tech-pill">NLTK</span>
+      <span class="tech-pill">pandas</span>
+      <span class="tech-pill">seaborn</span>
+      <span class="tech-pill">matplotlib</span>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="container">
+    <p>Unstructured Data Analytics · Spring 2026 · Mendoza College of Business, University of Notre Dame</p>
+  </div>
+</footer>
+
+<script>
+// Animated number counter
+function animateCounters() {
+  document.querySelectorAll('[data-count]').forEach(el => {
+    const target = parseInt(el.dataset.count);
+    const duration = 1500;
+    const start = performance.now();
+    function tick(now) {
+      const progress = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const current = Math.round(eased * target);
+      el.textContent = current.toLocaleString();
+      if (progress < 1) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  });
+}
+
+// Company sentiment bars
+const companies = [
+  { ticker: 'AMZN', val: 0.146 }, { ticker: 'KO', val: 0.131 },
+  { ticker: 'JNJ', val: 0.128 }, { ticker: 'MSFT', val: 0.125 },
+  { ticker: 'CAT', val: 0.121 }, { ticker: 'GOOGL', val: 0.114 },
+  { ticker: 'NVDA', val: 0.113 }, { ticker: 'WMT', val: 0.110 },
+  { ticker: 'BA', val: 0.108 }, { ticker: 'META', val: 0.105 },
+  { ticker: 'UNH', val: 0.101 }, { ticker: 'BAC', val: 0.098 },
+  { ticker: 'JPM', val: 0.094 }, { ticker: 'GS', val: 0.093 },
+  { ticker: 'AAPL', val: 0.073 }
+];
+
+const barsContainer = document.getElementById('company-bars');
+const maxVal = 0.16;
+companies.forEach(c => {
+  const pct = (c.val / maxVal) * 100;
+  barsContainer.innerHTML += `
+    <div class="company-bar">
+      <span class="ticker">${c.ticker}</span>
+      <div class="bar-track"><div class="bar-fill" data-width="${pct}%"></div></div>
+      <span class="val">${c.val.toFixed(3)}</span>
+    </div>`;
+});
+
+// Scroll-triggered animations
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      entry.target.classList.add('visible');
+      // Trigger bar animations inside this element
+      entry.target.querySelectorAll('.bar-fill').forEach(bar => {
+        bar.style.width = bar.dataset.width;
+      });
+      entry.target.querySelectorAll('.corr-bar-fill').forEach(bar => {
+        bar.style.width = bar.dataset.width;
+      });
+    }
+  });
+}, { threshold: 0.15 });
+
+document.querySelectorAll('.animate-in').forEach(el => observer.observe(el));
+
+// Start counters on load
+animateCounters();
+
+// Activate bars that are already visible
+setTimeout(() => {
+  document.querySelectorAll('.bar-fill').forEach(bar => {
+    const rect = bar.getBoundingClientRect();
+    if (rect.top < window.innerHeight) bar.style.width = bar.dataset.width;
+  });
+  document.querySelectorAll('.corr-bar-fill').forEach(bar => {
+    const rect = bar.getBoundingClientRect();
+    if (rect.top < window.innerHeight) bar.style.width = bar.dataset.width;
+  });
+}, 500);
+</script>
+</body>
+</html>

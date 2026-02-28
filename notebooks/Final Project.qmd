@@ -1,0 +1,2057 @@
+---
+title: "Untitled"
+format: html
+---
+
+```{python}
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import requests
+import re
+import nltk
+from nltk.stem import WordNetLemmatizer
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from collections import Counter
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from textblob import TextBlob
+import lda
+import statsmodels.formula.api as smf
+from sklearn.feature_extraction.text import CountVectorizer
+```
+
+```{python}
+# Set plot style
+sns.set_style("whitegrid")
+plt.rcParams['figure.figsize'] = (12, 6)
+
+data_path = "C:/Users/USER/Desktop/Unstructured Final Project/" 
+
+company_news = pd.read_csv(f'{data_path}company_news.csv')
+earnings_surprises = pd.read_csv(f'{data_path}earnings_surprises.csv')
+basic_financials = pd.read_csv(f'{data_path}basic_financials.csv')
+stock_prices = pd.read_csv(f'{data_path}stock_prices.csv')
+general_market_news = pd.read_csv(f'{data_path}general_market_news.csv')
+
+###############################################################################
+#  1.2  INSPECT THE MAIN DATASET: COMPANY NEWS
+###############################################################################
+
+# This is our PRIMARY dataset — 40k+ news articles with headlines and summaries
+# This is the text data we'll run sentiment analysis and topic modeling on
+
+print("\n--- Company News: Shape ---")
+print(company_news.shape)
+
+print("\n--- Company News: Columns ---")
+print(company_news.columns.tolist())
+
+print("\n--- Company News: First 3 Rows ---")
+print(company_news.head(3))
+
+print("\n--- Company News: Info ---")
+company_news.info()
+
+print("\n--- Company News: Describe ---")
+print(company_news.describe())
+
+# Check for missing values
+print("\n--- Missing Values ---")
+print(company_news.isnull().sum())
+
+###############################################################################
+#  1.3  CLEAN AND PREPARE COMPANY NEWS
+###############################################################################
+
+# Convert datetime column
+# The Finnhub API returns datetime as Unix timestamp
+# If 'datetime' column exists, convert it; otherwise check for 'date'
+if 'datetime' in company_news.columns:
+    company_news['date'] = pd.to_datetime(company_news['datetime'], unit='s')
+elif 'date' in company_news.columns:
+    company_news['date'] = pd.to_datetime(company_news['date'])
+
+# Extract useful time features
+company_news['year_month'] = company_news['date'].dt.to_period('M')
+company_news['month'] = company_news['date'].dt.month
+company_news['year'] = company_news['date'].dt.year
+company_news['day_of_week'] = company_news['date'].dt.day_name()
+
+# Check what text columns we have
+# Finnhub company news typically has: headline, summary, source, url
+text_cols = [col for col in company_news.columns if col in ['headline', 'summary', 'title']]
+print(f"\n--- Text columns available: {text_cols} ---")
+
+# Check a sample headline and summary
+if 'headline' in company_news.columns:
+    print("\nSample headlines:")
+    print(company_news['headline'].head(5).tolist())
+
+if 'summary' in company_news.columns:
+    print("\nSample summaries:")
+    print(company_news['summary'].head(3).tolist())
+
+###############################################################################
+#  1.4  ARTICLE DISTRIBUTION BY COMPANY
+###############################################################################
+
+# How many articles per company?
+# The 'related' column in Finnhub contains the ticker symbol
+
+# Identify the ticker column (could be 'related', 'symbol', or 'ticker')
+ticker_col = None
+for col in ['symbol', 'related', 'ticker']:
+    if col in company_news.columns:
+        ticker_col = col
+        break
+
+if ticker_col:
+    print(f"\n--- Articles per Company (column: {ticker_col}) ---")
+    articles_per_company = company_news[ticker_col].value_counts()
+    print(articles_per_company)
+    
+    # Plot: Articles per company
+    fig, ax = plt.subplots(figsize=(12, 6))
+    articles_per_company.plot(kind='bar', color='steelblue', ax=ax)
+    ax.set_title('Number of News Articles per Company', fontsize=14)
+    ax.set_xlabel('Company Ticker')
+    ax.set_ylabel('Number of Articles')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(f'{data_path}plot_articles_per_company.png', dpi=150)
+    plt.show()
+
+###############################################################################
+#  1.5  ARTICLE DISTRIBUTION OVER TIME
+###############################################################################
+
+# How are articles distributed over the 12-month collection period?
+articles_over_time = company_news.groupby('year_month').size()
+
+fig, ax = plt.subplots(figsize=(12, 6))
+articles_over_time.plot(kind='bar', color='coral', ax=ax)
+ax.set_title('Number of Articles Over Time (Monthly)', fontsize=14)
+ax.set_xlabel('Month')
+ax.set_ylabel('Number of Articles')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.savefig(f'{data_path}plot_articles_over_time.png', dpi=150)
+plt.show()
+
+###############################################################################
+#  1.6  SECTOR MAPPING
+###############################################################################
+
+# Map companies to sectors for later cross-sector analysis
+sector_map = {
+    'AAPL': 'Technology', 'MSFT': 'Technology', 'GOOGL': 'Technology',
+    'META': 'Technology', 'NVDA': 'Technology',
+    'JPM': 'Finance', 'GS': 'Finance', 'BAC': 'Finance',
+    'JNJ': 'Healthcare', 'UNH': 'Healthcare',
+    'AMZN': 'Consumer', 'WMT': 'Consumer', 'KO': 'Consumer',
+    'CAT': 'Industrial', 'BA': 'Industrial'
+}
+
+company_names = {
+    'AAPL': 'Apple', 'MSFT': 'Microsoft', 'GOOGL': 'Alphabet',
+    'META': 'Meta', 'NVDA': 'NVIDIA',
+    'JPM': 'JPMorgan', 'GS': 'Goldman Sachs', 'BAC': 'Bank of America',
+    'JNJ': 'Johnson & Johnson', 'UNH': 'UnitedHealth',
+    'AMZN': 'Amazon', 'WMT': 'Walmart', 'KO': 'Coca-Cola',
+    'CAT': 'Caterpillar', 'BA': 'Boeing'
+}
+
+if ticker_col:
+    company_news['sector'] = company_news[ticker_col].map(sector_map)
+    company_news['company_name'] = company_news[ticker_col].map(company_names)
+    
+    print("\n--- Articles per Sector ---")
+    print(company_news['sector'].value_counts())
+    
+    # Plot: Articles by sector
+    fig, ax = plt.subplots(figsize=(8, 5))
+    company_news['sector'].value_counts().plot(kind='bar', color='teal', ax=ax)
+    ax.set_title('Articles by Sector', fontsize=14)
+    ax.set_xlabel('Sector')
+    ax.set_ylabel('Number of Articles')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(f'{data_path}plot_articles_by_sector.png', dpi=150)
+    plt.show()
+
+###############################################################################
+#  1.7  TEXT LENGTH ANALYSIS
+###############################################################################
+
+# Understanding text length helps us decide preprocessing strategies
+
+if 'headline' in company_news.columns:
+    company_news['headline_word_count'] = company_news['headline'].astype(str).apply(
+        lambda x: len(x.split())
+    )
+    print("\n--- Headline Word Count Stats ---")
+    print(company_news['headline_word_count'].describe())
+
+if 'summary' in company_news.columns:
+    company_news['summary_word_count'] = company_news['summary'].astype(str).apply(
+        lambda x: len(x.split())
+    )
+    print("\n--- Summary Word Count Stats ---")
+    print(company_news['summary_word_count'].describe())
+    
+    # Plot: Distribution of summary lengths
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    
+    axes[0].hist(company_news['headline_word_count'], bins=30, color='steelblue', edgecolor='black')
+    axes[0].set_title('Headline Word Count Distribution')
+    axes[0].set_xlabel('Word Count')
+    axes[0].set_ylabel('Frequency')
+    
+    axes[1].hist(company_news['summary_word_count'], bins=30, color='coral', edgecolor='black')
+    axes[1].set_title('Summary Word Count Distribution')
+    axes[1].set_xlabel('Word Count')
+    axes[1].set_ylabel('Frequency')
+    
+    plt.tight_layout()
+    plt.savefig(f'{data_path}plot_text_length_distribution.png', dpi=150)
+    plt.show()
+
+###############################################################################
+#  1.8  INSPECT EARNINGS SURPRISES
+###############################################################################
+
+# This is our "outcome" data — did companies beat or miss estimates?
+
+print("\n" + "=" * 60)
+print("  EARNINGS SURPRISES")
+print("=" * 60)
+
+print(earnings_surprises.head(10))
+print(f"\nShape: {earnings_surprises.shape}")
+print(f"\nColumns: {earnings_surprises.columns.tolist()}")
+
+# If we have actual and estimate columns, calculate surprise percentage
+if 'actual' in earnings_surprises.columns and 'estimate' in earnings_surprises.columns:
+    # Surprise % might already be calculated; if not, compute it
+    if 'surprise_pct' not in earnings_surprises.columns:
+        earnings_surprises['surprise_pct'] = (
+            (earnings_surprises['actual'] - earnings_surprises['estimate']) 
+            / earnings_surprises['estimate'].abs() * 100
+        )
+    
+    print("\n--- Earnings Surprise % Summary ---")
+    print(earnings_surprises['surprise_pct'].describe())
+    
+    # Add sector mapping
+    if 'symbol' in earnings_surprises.columns:
+        earnings_surprises['sector'] = earnings_surprises['symbol'].map(sector_map)
+    
+    # Plot: Earnings surprises by company
+    if 'symbol' in earnings_surprises.columns:
+        fig, ax = plt.subplots(figsize=(12, 6))
+        surprise_by_company = earnings_surprises.groupby('symbol')['surprise_pct'].mean()
+        surprise_by_company.plot(kind='bar', color='green', ax=ax)
+        ax.set_title('Average Earnings Surprise % by Company', fontsize=14)
+        ax.set_xlabel('Company')
+        ax.set_ylabel('Surprise %')
+        ax.axhline(y=0, color='red', linestyle='--', alpha=0.5)
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig(f'{data_path}plot_earnings_surprises.png', dpi=150)
+        plt.show()
+
+###############################################################################
+#  1.9  INSPECT STOCK PRICES
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  STOCK PRICES")
+print("=" * 60)
+
+print(stock_prices.head())
+print(f"\nShape: {stock_prices.shape}")
+print(f"\nColumns: {stock_prices.columns.tolist()}")
+
+# Check which column has the ticker
+price_ticker_col = None
+for col in ['symbol', 'ticker', 'Symbol', 'Ticker']:
+    if col in stock_prices.columns:
+        price_ticker_col = col
+        break
+
+if price_ticker_col:
+    print(f"\nCompanies in stock data: {stock_prices[price_ticker_col].unique()}")
+
+# Convert date
+if 'Date' in stock_prices.columns:
+    stock_prices['Date'] = pd.to_datetime(stock_prices['Date'])
+elif 'date' in stock_prices.columns:
+    stock_prices['date'] = pd.to_datetime(stock_prices['date'])
+
+###############################################################################
+#  1.10  INSPECT BASIC FINANCIALS
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  BASIC FINANCIALS")
+print("=" * 60)
+
+print(basic_financials.head())
+print(f"\nShape: {basic_financials.shape}")
+print(f"\nColumns (first 20): {basic_financials.columns.tolist()[:20]}")
+
+###############################################################################
+#  1.11  NEWS SOURCE ANALYSIS
+###############################################################################
+
+# What news sources are represented?
+if 'source' in company_news.columns:
+    print("\n--- Top 15 News Sources ---")
+    print(company_news['source'].value_counts().head(15))
+    
+    fig, ax = plt.subplots(figsize=(12, 6))
+    company_news['source'].value_counts().head(15).plot(kind='barh', color='purple', ax=ax)
+    ax.set_title('Top 15 News Sources', fontsize=14)
+    ax.set_xlabel('Number of Articles')
+    plt.tight_layout()
+    plt.savefig(f'{data_path}plot_top_news_sources.png', dpi=150)
+    plt.show()
+
+###############################################################################
+#  1.12  SUMMARY
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  PART 1 SUMMARY")
+print("=" * 60)
+print(f"""
+  Company News:      {company_news.shape[0]:,} articles across {company_news[ticker_col].nunique() if ticker_col else 'N/A'} companies
+  Earnings Data:     {earnings_surprises.shape[0]} records
+  Stock Prices:      {stock_prices.shape[0]:,} trading day records
+  Basic Financials:  {basic_financials.shape[0]} company snapshots
+  Market News:       {general_market_news.shape[0]} articles
+  
+  Date Range:        {company_news['date'].min().strftime('%Y-%m-%d')} to {company_news['date'].max().strftime('%Y-%m-%d')}
+  Sectors:           {company_news['sector'].nunique() if 'sector' in company_news.columns else 'N/A'}
+  
+  NEXT STEP → Part 2: Text Preprocessing
+""")
+
+###############################################################################
+#  SAVE THE CLEANED DATA FOR PART 2
+###############################################################################
+
+company_news.to_csv(f'{data_path}company_news_cleaned.csv', index=False)
+print("Saved: company_news_cleaned.csv")
+
+```
+
+Text Preprocessing 
+
+```{python}
+
+sns.set_style("whitegrid")
+
+# nltk.download('wordnet')
+# nltk.download('omw-1.4')
+
+###############################################################################
+#  2.1  LOAD THE DATA FROM PART 1
+###############################################################################
+
+data_path = "C:/Users/USER/Desktop/Unstructured Final Project/"  # UPDATE to match your path
+
+company_news = pd.read_csv(f'{data_path}company_news_cleaned.csv')
+
+print(f"Loaded {company_news.shape[0]:,} articles")
+print(f"Columns: {company_news.columns.tolist()}")
+
+###############################################################################
+#  2.2  HANDLE MISSING TEXT
+###############################################################################
+
+print("\n--- Missing Values in Text Columns ---")
+print(f"headline nulls:  {company_news['headline'].isnull().sum()}")
+print(f"summary nulls:   {company_news['summary'].isnull().sum()}")
+
+company_news['headline'] = company_news['headline'].astype(str)
+company_news['summary'] = company_news['summary'].astype(str)
+
+empty_summaries = (company_news['summary'].str.strip() == '').sum()
+nan_string_summaries = (company_news['summary'] == 'nan').sum()
+print(f"Empty summary strings:  {empty_summaries}")
+print(f"'nan' summary strings:  {nan_string_summaries}")
+
+company_news['summary'] = company_news['summary'].replace('nan', '')
+
+# For articles with empty summaries, use the headline
+mask = company_news['summary'].str.strip() == ''
+company_news.loc[mask, 'summary'] = company_news.loc[mask, 'headline']
+print(f"Filled {mask.sum()} empty summaries with headline text")
+
+###############################################################################
+#  2.3  TEXT NORMALIZATION (Lowercase)
+###############################################################################
+
+company_news['headline_clean'] = company_news['headline'].str.lower()
+company_news['summary_clean'] = company_news['summary'].str.lower()
+
+print("\n--- Sample After Lowercasing ---")
+print(company_news['headline_clean'].head(3).tolist())
+
+###############################################################################
+#  2.4  REGEX CLEANING (Symbol and Word Removal)
+###############################################################################
+
+def clean_text(text):
+    """
+    Clean text using regex — same approach as class.
+    Removes URLs, HTML tags, special chars, numbers, extra spaces.
+    """
+    text = re.sub(r'https?://\S+|www\.\S+', '', text)       # URLs
+    text = re.sub(r'<.*?>', '', text)                         # HTML tags
+    text = re.sub(r'\S+@\S+', '', text)                       # emails
+    text = re.sub(r'\$([A-Za-z]+)', r'\1', text)              # $AAPL → AAPL
+    text = re.sub(r'\([^)]*\)', '', text)                     # (NYSE: AAPL)
+    text = re.sub(r"[().,?!;:'\"\-\[\]{}@#$%^&*_+=<>/\\|~`]", '', text)  # punctuation
+    text = re.sub(r'\b\d+\b', '', text)                       # standalone numbers
+    text = re.sub(r' +', ' ', text)                           # extra whitespace
+    return text.strip()
+
+company_news['headline_clean'] = company_news['headline_clean'].apply(clean_text)
+company_news['summary_clean'] = company_news['summary_clean'].apply(clean_text)
+
+print("\n--- Sample After Regex Cleaning ---")
+print("BEFORE:", company_news['headline'].iloc[0])
+print("AFTER: ", company_news['headline_clean'].iloc[0])
+
+###############################################################################
+#  2.5  STOPWORD REMOVAL
+###############################################################################
+
+# Same approach as class: download stopwords-iso list, build regex pattern
+
+stopwords = requests.get(
+    'https://raw.githubusercontent.com/stopwords-iso/stopwords-en/refs/heads/master/stopwords-en.txt'
+)
+stopwords = stopwords.text.split('\n')
+
+# Add domain-specific stopwords
+finance_stopwords = [
+    'said', 'says', 'also', 'would', 'could', 'one', 'new',
+    'may', 'like', 'get', 'us', 'year', 'years', 'reuters',
+    'yahoo', 'benzinga', 'seekingalpha', 'cnbc', 'marketwatch',
+    'ap', 'bloomberg', 'inc', 'corp', 'ltd', 'llc', 'company',
+    'stock', 'stocks', 'share', 'shares', 'market', 'markets',
+    'price', 'percent', 'million', 'billion', 'quarter', 'analyst',
+    'analysts', 'report', 'reported', 'reports', 'today', 'week'
+]
+[stopwords.append(x) for x in finance_stopwords]
+
+stopword_pattern = r'\b(?:{})\b'.format('|'.join(stopwords))
+
+company_news['headline_clean'] = company_news['headline_clean'].str.replace(
+    stopword_pattern, '', regex=True
+)
+company_news['summary_clean'] = company_news['summary_clean'].str.replace(
+    stopword_pattern, '', regex=True
+)
+
+# Clean up extra spaces after stopword removal
+company_news['headline_clean'] = company_news['headline_clean'].str.replace(
+    r' +', ' ', regex=True
+).str.strip()
+company_news['summary_clean'] = company_news['summary_clean'].str.replace(
+    r' +', ' ', regex=True
+).str.strip()
+
+print("\n--- Sample After Stopword Removal ---")
+print("BEFORE:", company_news['headline'].iloc[0].lower())
+print("AFTER: ", company_news['headline_clean'].iloc[0])
+
+###############################################################################
+#  2.6  LEMMATIZATION
+###############################################################################
+
+# From class: NLTK WordNetLemmatizer (text_prep.qmd approach)
+
+w_tokenizer = nltk.tokenize.WhitespaceTokenizer()
+lemmatizer = nltk.stem.WordNetLemmatizer()
+
+def lemmatize_text(text):
+    """Lemmatize text — same approach as class."""
+    return ' '.join([lemmatizer.lemmatize(w) for w in w_tokenizer.tokenize(text)])
+
+print("\nLemmatizing headlines...")
+company_news['headline_clean'] = company_news['headline_clean'].apply(lemmatize_text)
+
+print("Lemmatizing summaries...")
+company_news['summary_clean'] = company_news['summary_clean'].apply(lemmatize_text)
+
+print("\n--- Sample After Lemmatization ---")
+print(company_news['headline_clean'].head(5).tolist())
+
+###############################################################################
+#  2.7  WORD COUNT & FILTERING
+###############################################################################
+
+company_news['headline_wc_clean'] = company_news['headline_clean'].apply(
+    lambda x: len(x.split())
+)
+company_news['summary_wc_clean'] = company_news['summary_clean'].apply(
+    lambda x: len(x.split())
+)
+
+print("\n--- Clean Headline Word Count ---")
+print(company_news['headline_wc_clean'].describe())
+
+print("\n--- Clean Summary Word Count ---")
+print(company_news['summary_wc_clean'].describe())
+
+# Filter out articles with very short cleaned text
+before = len(company_news)
+company_news = company_news[company_news['summary_wc_clean'] >= 3]
+print(f"\nRemoved {before - len(company_news)} articles with <3 clean summary words")
+print(f"Remaining: {len(company_news):,} articles")
+
+###############################################################################
+#  2.8  COMBINE TEXT FOR ANALYSIS
+###############################################################################
+
+# headline alone is too short for LDA; combined gives better topics
+company_news['combined_text'] = (
+    company_news['headline_clean'] + ' ' + company_news['summary_clean']
+)
+
+print("\n--- Sample Combined Text ---")
+print(company_news['combined_text'].iloc[0])
+
+###############################################################################
+#  2.9  TF-IDF ANALYSIS (by Sector)
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  TF-IDF: DISTINGUISHING TERMS BY SECTOR")
+print("=" * 60)
+
+sector_texts = company_news.groupby('sector')['combined_text'].apply(
+    lambda x: ' '.join(x)
+).reset_index()
+
+tfidf_vec = TfidfVectorizer(max_features=1000, min_df=2)
+sector_tfidf = tfidf_vec.fit_transform(sector_texts['combined_text'])
+tfidf_tokens = tfidf_vec.get_feature_names_out()
+
+df_tfidf = pd.DataFrame(
+    data=sector_tfidf.toarray(),
+    index=sector_texts['sector'],
+    columns=tfidf_tokens
+)
+
+print("\nTop 10 TF-IDF terms per sector:")
+print("-" * 40)
+for sector in df_tfidf.index:
+    top_terms = df_tfidf.loc[sector].nlargest(10)
+    print(f"\n{sector}:")
+    for term, score in top_terms.items():
+        print(f"  {term:20s} {score:.4f}")
+
+###############################################################################
+#  2.10  TF-IDF ANALYSIS (by Company)
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  TF-IDF: DISTINGUISHING TERMS BY COMPANY")
+print("=" * 60)
+
+company_texts = company_news.groupby('symbol')['combined_text'].apply(
+    lambda x: ' '.join(x)
+).reset_index()
+
+tfidf_vec_company = TfidfVectorizer(max_features=2000, min_df=2)
+company_tfidf = tfidf_vec_company.fit_transform(company_texts['combined_text'])
+tfidf_tokens_company = tfidf_vec_company.get_feature_names_out()
+
+df_tfidf_company = pd.DataFrame(
+    data=company_tfidf.toarray(),
+    index=company_texts['symbol'],
+    columns=tfidf_tokens_company
+)
+
+for ticker in ['AAPL', 'JPM', 'BA', 'NVDA', 'KO']:
+    top_terms = df_tfidf_company.loc[ticker].nlargest(5)
+    print(f"\n{ticker}:")
+    for term, score in top_terms.items():
+        print(f"  {term:20s} {score:.4f}")
+
+###############################################################################
+#  2.11  VISUALIZE: WORD FREQUENCY
+###############################################################################
+
+all_words = ' '.join(company_news['combined_text']).split()
+word_freq = Counter(all_words)
+
+top_25 = pd.DataFrame(word_freq.most_common(25), columns=['word', 'count'])
+
+fig, ax = plt.subplots(figsize=(12, 6))
+ax.barh(top_25['word'][::-1], top_25['count'][::-1], color='steelblue')
+ax.set_title('Top 25 Most Frequent Words (After Cleaning)', fontsize=14)
+ax.set_xlabel('Frequency')
+plt.tight_layout()
+plt.show()
+
+###############################################################################
+#  PART 2 COMPLETE — company_news dataframe stays in memory for Parts 3-6
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  PART 2 COMPLETE")
+print("=" * 60)
+print(f"""
+  Articles preprocessed:  {company_news.shape[0]:,}
+  
+  New columns added to company_news:
+    - headline_clean           (lowercased, cleaned, stopwords removed, lemmatized)
+    - summary_clean            (lowercased, cleaned, stopwords removed, lemmatized)
+    - combined_text            (headline_clean + summary_clean)
+    - headline_wc_clean
+    - summary_wc_clean
+  
+  TF-IDF analysis complete (by sector and company)
+  
+  NEXT STEP → Part 3: Sentiment Analysis (VADER + TextBlob)
+""")
+```
+
+Sentimental Analysis
+
+```{python}
+###############################################################################
+#  PART 3: SENTIMENT ANALYSIS
+###############################################################################
+#
+#  From class (sentiment_analysis.qmd):
+#    - TextBlob: polarity and subjectivity
+#    - VADER: compound scores (handles amplifiers, negators, adversatives)
+#
+#  IMPORTANT: We run sentiment on the ORIGINAL text (not cleaned).
+#  VADER needs punctuation, capitalization, and words like "but" / "really"
+#  to score properly. Remember from class:
+#    "I hate code, but I love money" → VADER uses the adversative "but"
+#    to downweight "hate" and amplify "love"
+#
+#  Continues from Part 2. company_news dataframe is already in memory.
+#
+###############################################################################
+
+sns.set_style("whitegrid")
+
+###############################################################################
+#  3.1  VADER SENTIMENT ON HEADLINES
+###############################################################################
+
+# VADER works best on short text (headlines are avg ~12 words — perfect)
+# We use the ORIGINAL headline, not the cleaned version
+
+vader = SentimentIntensityAnalyzer()
+
+print("Running VADER on headlines...")
+
+# Apply VADER to each headline — returns compound, pos, neg, neu scores
+company_news['vader_compound'] = company_news['headline'].apply(
+    lambda x: vader.polarity_scores(str(x)).get('compound')
+)
+company_news['vader_pos'] = company_news['headline'].apply(
+    lambda x: vader.polarity_scores(str(x)).get('pos')
+)
+company_news['vader_neg'] = company_news['headline'].apply(
+    lambda x: vader.polarity_scores(str(x)).get('neg')
+)
+company_news['vader_neu'] = company_news['headline'].apply(
+    lambda x: vader.polarity_scores(str(x)).get('neu')
+)
+
+print("VADER complete.")
+
+print("\n--- VADER Compound Score Summary ---")
+print(company_news['vader_compound'].describe())
+
+# Classify sentiment into categories
+company_news['vader_label'] = company_news['vader_compound'].apply(
+    lambda x: 'positive' if x >= 0.05 else ('negative' if x <= -0.05 else 'neutral')
+)
+
+print("\n--- VADER Sentiment Distribution ---")
+print(company_news['vader_label'].value_counts())
+print(company_news['vader_label'].value_counts(normalize=True).round(3))
+
+###############################################################################
+#  3.2  TEXTBLOB SENTIMENT ON HEADLINES
+###############################################################################
+
+# TextBlob gives us polarity (-1 to 1) and subjectivity (0 to 1)
+# From class: blob.polarity and blob.subjectivity
+
+print("\nRunning TextBlob on headlines...")
+
+company_news['tb_polarity'] = company_news['headline'].apply(
+    lambda x: TextBlob(str(x)).polarity
+)
+company_news['tb_subjectivity'] = company_news['headline'].apply(
+    lambda x: TextBlob(str(x)).subjectivity
+)
+
+print("TextBlob complete.")
+
+print("\n--- TextBlob Polarity Summary ---")
+print(company_news['tb_polarity'].describe())
+
+print("\n--- TextBlob Subjectivity Summary ---")
+print(company_news['tb_subjectivity'].describe())
+
+###############################################################################
+#  3.3  COMPARE VADER vs TEXTBLOB
+###############################################################################
+
+# From class we learned these tools can disagree
+# Let's see how correlated they are
+
+correlation = company_news['vader_compound'].corr(company_news['tb_polarity'])
+print(f"\n--- VADER vs TextBlob Correlation: {correlation:.4f} ---")
+
+fig, ax = plt.subplots(figsize=(8, 6))
+ax.scatter(
+    company_news['vader_compound'].sample(2000, random_state=42),
+    company_news['tb_polarity'].sample(2000, random_state=42),
+    alpha=0.3, s=10, color='steelblue'
+)
+ax.set_xlabel('VADER Compound')
+ax.set_ylabel('TextBlob Polarity')
+ax.set_title(f'VADER vs TextBlob Sentiment (r = {correlation:.3f})')
+ax.axhline(y=0, color='red', linestyle='--', alpha=0.3)
+ax.axvline(x=0, color='red', linestyle='--', alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+###############################################################################
+#  3.4  SENTIMENT BY COMPANY
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  SENTIMENT BY COMPANY")
+print("=" * 60)
+
+sentiment_by_company = company_news.groupby('symbol').agg(
+    vader_mean=('vader_compound', 'mean'),
+    vader_std=('vader_compound', 'std'),
+    tb_mean=('tb_polarity', 'mean'),
+    article_count=('vader_compound', 'count')
+).round(4)
+
+print(sentiment_by_company.sort_values('vader_mean', ascending=False))
+
+# Plot: Average VADER sentiment by company
+fig, ax = plt.subplots(figsize=(12, 6))
+sentiment_sorted = sentiment_by_company.sort_values('vader_mean')
+colors = ['red' if x < 0 else 'green' for x in sentiment_sorted['vader_mean']]
+ax.barh(sentiment_sorted.index, sentiment_sorted['vader_mean'], color=colors)
+ax.set_xlabel('Average VADER Compound Score')
+ax.set_title('Average Headline Sentiment by Company (VADER)', fontsize=14)
+ax.axvline(x=0, color='black', linewidth=0.8)
+plt.tight_layout()
+plt.show()
+
+###############################################################################
+#  3.5  SENTIMENT BY SECTOR
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  SENTIMENT BY SECTOR")
+print("=" * 60)
+
+sentiment_by_sector = company_news.groupby('sector').agg(
+    vader_mean=('vader_compound', 'mean'),
+    vader_std=('vader_compound', 'std'),
+    tb_mean=('tb_polarity', 'mean'),
+    tb_subj_mean=('tb_subjectivity', 'mean'),
+    article_count=('vader_compound', 'count')
+).round(4)
+
+print(sentiment_by_sector.sort_values('vader_mean', ascending=False))
+
+# Plot: Sentiment distribution by sector (box plot)
+fig, ax = plt.subplots(figsize=(10, 6))
+company_news.boxplot(column='vader_compound', by='sector', ax=ax)
+ax.set_title('VADER Sentiment Distribution by Sector', fontsize=14)
+ax.set_xlabel('Sector')
+ax.set_ylabel('VADER Compound Score')
+plt.suptitle('')  # remove default pandas title
+plt.tight_layout()
+plt.show()
+
+###############################################################################
+#  3.6  SENTIMENT OVER TIME
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  SENTIMENT OVER TIME")
+print("=" * 60)
+
+# Convert date if needed
+company_news['date'] = pd.to_datetime(company_news['date'])
+company_news['year_month'] = company_news['date'].dt.to_period('M')
+
+# Monthly average sentiment
+monthly_sentiment = company_news.groupby('year_month').agg(
+    vader_mean=('vader_compound', 'mean'),
+    article_count=('vader_compound', 'count')
+).reset_index()
+
+monthly_sentiment['year_month_str'] = monthly_sentiment['year_month'].astype(str)
+
+fig, ax = plt.subplots(figsize=(14, 6))
+ax.plot(
+    monthly_sentiment['year_month_str'],
+    monthly_sentiment['vader_mean'],
+    marker='o', color='steelblue', linewidth=2
+)
+ax.axhline(y=0, color='red', linestyle='--', alpha=0.5)
+ax.set_xlabel('Month')
+ax.set_ylabel('Average VADER Compound')
+ax.set_title('Average Headline Sentiment Over Time', fontsize=14)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+###############################################################################
+#  3.7  SENTIMENT OVER TIME BY SECTOR
+###############################################################################
+
+monthly_sector = company_news.groupby(['year_month', 'sector']).agg(
+    vader_mean=('vader_compound', 'mean')
+).reset_index()
+
+monthly_sector['year_month_str'] = monthly_sector['year_month'].astype(str)
+
+fig, ax = plt.subplots(figsize=(14, 6))
+for sector in monthly_sector['sector'].unique():
+    subset = monthly_sector[monthly_sector['sector'] == sector]
+    ax.plot(
+        subset['year_month_str'],
+        subset['vader_mean'],
+        marker='o', label=sector, linewidth=1.5
+    )
+ax.axhline(y=0, color='red', linestyle='--', alpha=0.3)
+ax.set_xlabel('Month')
+ax.set_ylabel('Average VADER Compound')
+ax.set_title('Sentiment Over Time by Sector', fontsize=14)
+ax.legend(loc='best')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+###############################################################################
+#  3.8  MOST POSITIVE AND NEGATIVE HEADLINES
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  MOST POSITIVE HEADLINES")
+print("=" * 60)
+
+top_positive = company_news.nlargest(10, 'vader_compound')[
+    ['symbol', 'headline', 'vader_compound']
+]
+for _, row in top_positive.iterrows():
+    print(f"  [{row['symbol']}] ({row['vader_compound']:.3f}) {row['headline'][:80]}")
+
+print("\n" + "=" * 60)
+print("  MOST NEGATIVE HEADLINES")
+print("=" * 60)
+
+top_negative = company_news.nsmallest(10, 'vader_compound')[
+    ['symbol', 'headline', 'vader_compound']
+]
+for _, row in top_negative.iterrows():
+    print(f"  [{row['symbol']}] ({row['vader_compound']:.3f}) {row['headline'][:80]}")
+
+###############################################################################
+#  3.9  SENTIMENT DISTRIBUTION VISUALIZATION
+###############################################################################
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+# VADER distribution
+axes[0].hist(company_news['vader_compound'], bins=50, color='steelblue', edgecolor='black')
+axes[0].set_title('VADER Compound Score Distribution')
+axes[0].set_xlabel('Compound Score')
+axes[0].set_ylabel('Frequency')
+axes[0].axvline(x=0, color='red', linestyle='--')
+
+# TextBlob distribution
+axes[1].hist(company_news['tb_polarity'], bins=50, color='coral', edgecolor='black')
+axes[1].set_title('TextBlob Polarity Distribution')
+axes[1].set_xlabel('Polarity')
+axes[1].set_ylabel('Frequency')
+axes[1].axvline(x=0, color='red', linestyle='--')
+
+plt.tight_layout()
+plt.show()
+
+###############################################################################
+#  3.10  POSITIVE vs NEGATIVE ARTICLE RATIO BY COMPANY
+###############################################################################
+
+sentiment_ratio = company_news.groupby('symbol')['vader_label'].value_counts(
+    normalize=True
+).unstack(fill_value=0).round(3)
+
+print("\n--- Sentiment Ratio by Company ---")
+print(sentiment_ratio)
+
+# Stacked bar chart
+fig, ax = plt.subplots(figsize=(12, 6))
+sentiment_ratio[['positive', 'neutral', 'negative']].plot(
+    kind='bar', stacked=True, ax=ax,
+    color=['green', 'gray', 'red'], alpha=0.8
+)
+ax.set_title('Sentiment Distribution by Company', fontsize=14)
+ax.set_xlabel('Company')
+ax.set_ylabel('Proportion')
+ax.legend(title='Sentiment')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+###############################################################################
+#  PART 3 COMPLETE — company_news now has sentiment columns for Parts 4-6
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  PART 3 COMPLETE")
+print("=" * 60)
+print(f"""
+  New columns added to company_news:
+    - vader_compound      (VADER compound score, -1 to 1)
+    - vader_pos           (VADER positive proportion)
+    - vader_neg           (VADER negative proportion)
+    - vader_neu           (VADER neutral proportion)
+    - vader_label         (positive / neutral / negative)
+    - tb_polarity         (TextBlob polarity, -1 to 1)
+    - tb_subjectivity     (TextBlob subjectivity, 0 to 1)
+  
+  NEXT STEP → Part 4: Topic Modeling (LDA)
+""")
+```
+
+Topic Modeling
+
+```{python}
+###############################################################################
+#  PART 4: TOPIC MODELING (LDA)
+###############################################################################
+#
+#  From class (topic_model_demo.py):
+#    - CountVectorizer → document-term matrix
+#    - lda.LDA → fit topic model
+#    - Extract top words per topic
+#    - Assign top_topic and top_prob to each document
+#    - Track topic evolution over time
+#    - OLS regression on topic probabilities (same as class demo)
+#
+#  We use the CLEANED combined_text from Part 2.
+#  company_news dataframe is already in memory from Parts 2-3.
+#
+###############################################################################
+
+###############################################################################
+#  4.1  BUILD DOCUMENT-TERM MATRIX
+###############################################################################
+
+# Same as class: CountVectorizer → fit_transform on cleaned text
+
+vectorizer = CountVectorizer()
+
+X = vectorizer.fit_transform(company_news['combined_text'])
+
+vocab = vectorizer.get_feature_names_out()
+
+print(f"Document-Term Matrix shape: {X.shape}")
+print(f"  Documents: {X.shape[0]:,}")
+print(f"  Vocabulary size: {X.shape[1]:,}")
+
+###############################################################################
+#  4.2  FIT LDA MODEL
+###############################################################################
+
+# Same as class demo: lda.LDA with n_topics and n_iter
+# Starting with 5 topics (same as class demo)
+# n_iter=500 matches class; increase if needed
+
+model = lda.LDA(n_topics=5, n_iter=500, random_state=1)
+
+print("\nFitting LDA model (5 topics, 500 iterations)...")
+print("This may take a few minutes with 39k documents...")
+
+model.fit(X)
+
+print("LDA model fit complete.")
+
+###############################################################################
+#  4.3  EXTRACT TOP WORDS PER TOPIC
+###############################################################################
+
+# Same as class: topic_word matrix → argsort → top N words
+
+topic_word = model.topic_word_
+
+n_top_words = 10
+
+top_words = []
+
+print("\n" + "=" * 60)
+print("  TOP WORDS PER TOPIC")
+print("=" * 60)
+
+for i, topic_dist in enumerate(topic_word):
+    topic_words = np.array(vocab)[np.argsort(topic_dist)][:-n_top_words:-1]
+    top_words.append(' '.join(topic_words))
+    print(f'\nTopic {i}: {" ".join(topic_words)}')
+
+###############################################################################
+#  4.4  ASSIGN TOPICS TO DOCUMENTS
+###############################################################################
+
+# Same as class: argmax for top topic, max for top probability
+
+company_news['top_topic'] = np.argmax(model.doc_topic_, axis=1)
+
+company_news['top_prob'] = [
+    max(model.doc_topic_[x]) for x in range(len(model.doc_topic_))
+]
+
+print("\n--- Topic Distribution ---")
+print(company_news['top_topic'].value_counts().sort_index())
+
+print("\n--- Top Probability Summary ---")
+print(company_news['top_prob'].describe())
+
+###############################################################################
+#  4.5  ADD INDIVIDUAL TOPIC PROBABILITIES
+###############################################################################
+
+# Same as class: assign each topic's probability as its own column
+
+for i in range(5):
+    company_news[f'topic_{i+1}'] = model.doc_topic_[:, i]
+
+###############################################################################
+#  4.6  TOPIC DISTRIBUTION BY SECTOR
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  TOPICS BY SECTOR")
+print("=" * 60)
+
+topic_by_sector = company_news.groupby('sector')['top_topic'].value_counts(
+    normalize=True
+).unstack(fill_value=0).round(3)
+
+print(topic_by_sector)
+
+# Heatmap: Topic distribution across sectors
+fig, ax = plt.subplots(figsize=(10, 6))
+sns.heatmap(
+    topic_by_sector, annot=True, fmt='.2f', cmap='YlOrRd',
+    xticklabels=[f'Topic {i}\n{top_words[i][:30]}...' for i in range(5)],
+    ax=ax
+)
+ax.set_title('Topic Distribution by Sector', fontsize=14)
+ax.set_ylabel('Sector')
+plt.tight_layout()
+plt.show()
+
+###############################################################################
+#  4.7  TOPIC DISTRIBUTION BY COMPANY
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  TOPICS BY COMPANY")
+print("=" * 60)
+
+topic_by_company = company_news.groupby('symbol')['top_topic'].value_counts(
+    normalize=True
+).unstack(fill_value=0).round(3)
+
+print(topic_by_company)
+
+# Heatmap
+fig, ax = plt.subplots(figsize=(12, 8))
+sns.heatmap(
+    topic_by_company, annot=True, fmt='.2f', cmap='YlOrRd',
+    xticklabels=[f'Topic {i}' for i in range(5)],
+    ax=ax
+)
+ax.set_title('Topic Distribution by Company', fontsize=14)
+ax.set_ylabel('Company')
+plt.tight_layout()
+plt.show()
+
+###############################################################################
+#  4.8  TOPIC EVOLUTION OVER TIME
+###############################################################################
+
+# Same as class: aggregate by top_topic and time, plot
+
+print("\n" + "=" * 60)
+print("  TOPIC EVOLUTION OVER TIME")
+print("=" * 60)
+
+company_news['date'] = pd.to_datetime(company_news['date'])
+company_news['year_month_dt'] = company_news['date'].dt.to_period('M')
+
+# Filter to the main data window (2025-03 to 2026-02) to avoid sparse months
+company_news_main = company_news[company_news['date'] >= '2025-03-01'].copy()
+
+aggregated = company_news_main.groupby(
+    ['top_topic', 'year_month_dt']
+)['top_prob'].mean().to_frame(name='prob').reset_index()
+
+aggregated['year_month_str'] = aggregated['year_month_dt'].astype(str)
+
+# Same plot style as class: lineplot with hue
+fig, ax = plt.subplots(figsize=(14, 6))
+sns.lineplot(
+    x='year_month_str', y='prob', data=aggregated,
+    hue='top_topic', marker='o', ax=ax
+)
+ax.set_title('Average Topic Probability Over Time', fontsize=14)
+ax.set_xlabel('Month')
+ax.set_ylabel('Average Probability')
+ax.legend(title='Topic', labels=[f'T{i}: {top_words[i][:25]}...' for i in range(5)])
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+###############################################################################
+#  4.9  OLS REGRESSION ON TOPICS OVER TIME
+###############################################################################
+
+# Same as class demo: smf.ols("topic_X ~ year", data)
+# We use a numeric month index instead of year since our data spans ~12 months
+
+print("\n" + "=" * 60)
+print("  OLS: TOPIC PROBABILITIES OVER TIME")
+print("=" * 60)
+
+# Create a numeric time variable (months since start)
+company_news_main['month_num'] = (
+    company_news_main['date'].dt.year * 12 + company_news_main['date'].dt.month
+)
+min_month = company_news_main['month_num'].min()
+company_news_main['month_index'] = company_news_main['month_num'] - min_month
+
+# Run OLS for each topic (same pattern as class demo)
+ols_results = {}
+predictions = {}
+
+for i in range(5):
+    formula = f"topic_{i+1} ~ month_index"
+    mf = smf.ols(formula, company_news_main)
+    mdf = mf.fit()
+    ols_results[i] = mdf
+    predictions[i] = mdf.get_prediction()
+
+    print(f"\n--- Topic {i+1} ---")
+    print(f"  Coefficient (month_index): {mdf.params['month_index']:.6f}")
+    print(f"  P-value:                   {mdf.pvalues['month_index']:.4f}")
+    print(f"  R-squared:                 {mdf.rsquared:.4f}")
+    direction = "↑ increasing" if mdf.params['month_index'] > 0 else "↓ decreasing"
+    sig = "***" if mdf.pvalues['month_index'] < 0.001 else (
+        "**" if mdf.pvalues['month_index'] < 0.01 else (
+            "*" if mdf.pvalues['month_index'] < 0.05 else "ns"
+        )
+    )
+    print(f"  Trend: {direction} ({sig})")
+
+# Combined prediction plot (same as class demo)
+fig, ax = plt.subplots(figsize=(10, 6))
+
+for i in range(5):
+    ax.plot(
+        company_news_main['month_index'],
+        predictions[i].predicted_mean,
+        label=f"T{i+1}: {top_words[i][:20]}..."
+    )
+
+ax.set_xlabel('Month Index')
+ax.set_ylabel('Predicted Topic Probability')
+ax.set_title('OLS: Topic Probability Trends Over Time', fontsize=14)
+legend = ax.legend(loc="best")
+plt.tight_layout()
+plt.show()
+
+###############################################################################
+#  4.10  MIXED EFFECTS MODEL
+###############################################################################
+
+# Same as class: mixed linear model with topic as group
+
+print("\n" + "=" * 60)
+print("  MIXED EFFECTS MODEL")
+print("=" * 60)
+
+mf_mixed = smf.mixedlm(
+    "top_prob ~ month_index",
+    company_news_main,
+    groups=company_news_main["top_topic"]
+)
+
+mdf_mixed = mf_mixed.fit()
+
+print(mdf_mixed.summary())
+
+###############################################################################
+#  4.11  SAMPLE ARTICLES PER TOPIC
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  SAMPLE HEADLINES PER TOPIC")
+print("=" * 60)
+
+for topic_id in range(5):
+    topic_articles = company_news[company_news['top_topic'] == topic_id].nlargest(
+        5, 'top_prob'
+    )
+    print(f"\n--- Topic {topic_id}: {top_words[topic_id][:40]} ---")
+    for _, row in topic_articles.iterrows():
+        print(f"  [{row['symbol']}] (prob={row['top_prob']:.3f}) {row['headline'][:75]}")
+
+###############################################################################
+#  4.12  TOPIC-SENTIMENT RELATIONSHIP
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  TOPIC vs SENTIMENT")
+print("=" * 60)
+
+topic_sentiment = company_news.groupby('top_topic').agg(
+    vader_mean=('vader_compound', 'mean'),
+    vader_std=('vader_compound', 'std'),
+    count=('vader_compound', 'count')
+).round(4)
+
+for i in range(5):
+    topic_sentiment.loc[i, 'top_words'] = top_words[i][:40]
+
+print(topic_sentiment)
+
+# Box plot: sentiment by topic
+fig, ax = plt.subplots(figsize=(10, 6))
+company_news.boxplot(column='vader_compound', by='top_topic', ax=ax)
+ax.set_title('VADER Sentiment by Topic', fontsize=14)
+ax.set_xlabel('Topic')
+ax.set_ylabel('VADER Compound Score')
+plt.suptitle('')
+plt.tight_layout()
+plt.show()
+
+###############################################################################
+#  PART 4 COMPLETE — company_news now has topic columns for Parts 5-6
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  PART 4 COMPLETE")
+print("=" * 60)
+print(f"""
+  New columns added to company_news:
+    - top_topic           (0-4, most likely topic)
+    - top_prob            (probability of top topic)
+    - topic_1 ... topic_5 (probability of each topic)
+  
+  LDA model with 5 topics fitted on {len(company_news):,} articles
+  OLS regression and mixed effects model complete
+  
+  NEXT STEP → Part 5: Market Impact Analysis
+               (correlate sentiment + topics with stock prices & earnings)
+""")
+```
+
+Market Impact Analysis
+
+```{python}
+###############################################################################
+#  PART 5: MARKET IMPACT ANALYSIS
+###############################################################################
+#
+#  This is where we bring it all together:
+#    - Does news sentiment predict stock price movements?
+#    - Do topic distributions relate to earnings surprises?
+#    - OLS regression: sentiment → returns, topics → returns
+#
+#  Uses company_news (with sentiment + topic columns) from Parts 2-4,
+#  plus earnings_surprises and stock_prices from Part 1.
+#
+###############################################################################
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import statsmodels.formula.api as smf
+
+sns.set_style("whitegrid")
+
+###############################################################################
+#  5.1  LOAD STOCK PRICES & EARNINGS (from Part 1)
+###############################################################################
+
+data_path = ""  # UPDATE to match your path
+
+# Load earnings (this one is clean from Part 1)
+earnings_surprises = pd.read_csv(f'{data_path}earnings_surprises.csv')
+
+# Load stock prices — this has a multi-header format from yfinance
+# Row 0 = metric names (Close, High, Low, Open, Volume)
+# Row 1 = ticker symbols
+# Row 2+ = actual data with dates in first column
+stock_raw = pd.read_csv(f'{data_path}stock_prices.csv', header=[0, 1])
+
+print("Raw stock data shape:", stock_raw.shape)
+print("First few column pairs:", list(stock_raw.columns[:6]))
+
+###############################################################################
+#  5.2  CLEAN STOCK PRICES
+###############################################################################
+
+# The yfinance multi-index header needs to be reshaped
+# We want: date | symbol | close | high | low | open | volume
+
+# Flatten the multi-index columns
+stock_raw.columns = ['_'.join(col).strip() for col in stock_raw.columns]
+
+print("\nFlattened columns (first 10):", stock_raw.columns[:10].tolist())
+
+# The first column should be the date (Price_Ticker or similar)
+# Let's identify it
+date_col = stock_raw.columns[0]
+print(f"Date column: {date_col}")
+
+# Skip the row that has 'date' or 'Ticker' as values (row 0 after header)
+stock_raw = stock_raw[stock_raw[date_col] != 'date']
+stock_raw = stock_raw[stock_raw[date_col] != 'Ticker']
+
+# Identify Close columns for each ticker
+close_cols = [col for col in stock_raw.columns if col.startswith('Close')]
+tickers_in_data = [col.replace('Close_', '') for col in close_cols]
+
+print(f"\nTickers found: {tickers_in_data}")
+
+# Build a clean long-format dataframe
+stock_records = []
+
+for ticker in tickers_in_data:
+    close_col = f'Close_{ticker}'
+    if close_col in stock_raw.columns:
+        temp = stock_raw[[date_col, close_col]].copy()
+        temp.columns = ['date', 'close']
+        temp['symbol'] = ticker
+        temp['close'] = pd.to_numeric(temp['close'], errors='coerce')
+        temp['date'] = pd.to_datetime(temp['date'], errors='coerce')
+        temp = temp.dropna(subset=['date', 'close'])
+        stock_records.append(temp)
+
+stock_prices = pd.concat(stock_records, ignore_index=True)
+stock_prices = stock_prices.sort_values(['symbol', 'date']).reset_index(drop=True)
+
+print(f"\nClean stock data: {stock_prices.shape[0]:,} rows")
+print(stock_prices.head())
+
+###############################################################################
+#  5.3  CALCULATE STOCK RETURNS
+###############################################################################
+
+# Daily returns = (close_today - close_yesterday) / close_yesterday
+stock_prices['daily_return'] = stock_prices.groupby('symbol')['close'].pct_change()
+
+# Weekly returns (5-day rolling)
+stock_prices['weekly_return'] = stock_prices.groupby('symbol')['close'].pct_change(5)
+
+# Monthly returns
+stock_prices['year_month'] = stock_prices['date'].dt.to_period('M')
+
+monthly_returns = stock_prices.groupby(['symbol', 'year_month']).agg(
+    monthly_return=('daily_return', lambda x: (1 + x).prod() - 1),
+    avg_close=('close', 'mean'),
+    volatility=('daily_return', 'std')
+).reset_index()
+
+print("\n--- Monthly Returns Sample ---")
+print(monthly_returns.head(10))
+
+###############################################################################
+#  5.4  AGGREGATE MONTHLY SENTIMENT
+###############################################################################
+
+# Aggregate news sentiment by company and month
+company_news['date'] = pd.to_datetime(company_news['date'])
+company_news['year_month'] = company_news['date'].dt.to_period('M')
+
+monthly_sentiment = company_news.groupby(['symbol', 'year_month']).agg(
+    vader_mean=('vader_compound', 'mean'),
+    vader_std=('vader_compound', 'std'),
+    tb_mean=('tb_polarity', 'mean'),
+    pct_positive=('vader_label', lambda x: (x == 'positive').mean()),
+    pct_negative=('vader_label', lambda x: (x == 'negative').mean()),
+    article_count=('vader_compound', 'count'),
+    top_topic_mode=('top_topic', lambda x: x.mode().iloc[0] if len(x.mode()) > 0 else np.nan),
+    topic_1_mean=('topic_1', 'mean'),
+    topic_2_mean=('topic_2', 'mean'),
+    topic_3_mean=('topic_3', 'mean'),
+    topic_4_mean=('topic_4', 'mean'),
+    topic_5_mean=('topic_5', 'mean')
+).reset_index()
+
+print(f"\n--- Monthly Sentiment: {monthly_sentiment.shape[0]} rows ---")
+print(monthly_sentiment.head())
+
+###############################################################################
+#  5.5  MERGE SENTIMENT WITH RETURNS
+###############################################################################
+
+# Merge on symbol + year_month
+merged = monthly_returns.merge(
+    monthly_sentiment,
+    on=['symbol', 'year_month'],
+    how='inner'
+)
+
+print(f"\n--- Merged Dataset: {merged.shape[0]} rows ---")
+print(merged.columns.tolist())
+print(merged.head())
+
+###############################################################################
+#  5.6  CORRELATION ANALYSIS
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  CORRELATION: SENTIMENT vs RETURNS")
+print("=" * 60)
+
+corr_cols = [
+    'monthly_return', 'volatility', 'vader_mean', 'tb_mean',
+    'pct_positive', 'pct_negative', 'article_count',
+    'topic_1_mean', 'topic_2_mean', 'topic_3_mean',
+    'topic_4_mean', 'topic_5_mean'
+]
+
+corr_matrix = merged[corr_cols].corr().round(3)
+
+# Show correlations with monthly_return
+print("\nCorrelation with Monthly Return:")
+print(corr_matrix['monthly_return'].sort_values(ascending=False))
+
+# Heatmap
+fig, ax = plt.subplots(figsize=(12, 10))
+sns.heatmap(
+    corr_matrix, annot=True, fmt='.2f', cmap='RdBu_r',
+    center=0, ax=ax, vmin=-1, vmax=1
+)
+ax.set_title('Correlation Matrix: Sentiment, Topics & Returns', fontsize=14)
+plt.tight_layout()
+plt.show()
+
+###############################################################################
+#  5.7  SCATTER: SENTIMENT vs RETURNS
+###############################################################################
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+# VADER vs Returns
+axes[0].scatter(merged['vader_mean'], merged['monthly_return'],
+                alpha=0.5, s=30, color='steelblue')
+axes[0].set_xlabel('Average VADER Sentiment')
+axes[0].set_ylabel('Monthly Return')
+axes[0].set_title('VADER Sentiment vs Monthly Return')
+axes[0].axhline(y=0, color='red', linestyle='--', alpha=0.3)
+axes[0].axvline(x=0, color='red', linestyle='--', alpha=0.3)
+
+# % Negative vs Returns
+axes[1].scatter(merged['pct_negative'], merged['monthly_return'],
+                alpha=0.5, s=30, color='coral')
+axes[1].set_xlabel('% Negative Headlines')
+axes[1].set_ylabel('Monthly Return')
+axes[1].set_title('% Negative Headlines vs Monthly Return')
+axes[1].axhline(y=0, color='red', linestyle='--', alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+###############################################################################
+#  5.8  OLS: SENTIMENT → RETURNS
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  OLS: SENTIMENT PREDICTING RETURNS")
+print("=" * 60)
+
+# Model 1: VADER sentiment → returns
+model1 = smf.ols("monthly_return ~ vader_mean", merged).fit()
+print("\n--- Model 1: VADER → Returns ---")
+print(f"  Coefficient: {model1.params['vader_mean']:.4f}")
+print(f"  P-value:     {model1.pvalues['vader_mean']:.4f}")
+print(f"  R-squared:   {model1.rsquared:.4f}")
+
+# Model 2: Multiple sentiment features → returns
+model2 = smf.ols(
+    "monthly_return ~ vader_mean + pct_negative + article_count + volatility",
+    merged
+).fit()
+print("\n--- Model 2: Multiple Sentiment Features → Returns ---")
+print(model2.summary().tables[1])
+
+# Model 3: Topic probabilities → returns
+model3 = smf.ols(
+    "monthly_return ~ topic_1_mean + topic_2_mean + topic_3_mean + topic_4_mean + topic_5_mean",
+    merged
+).fit()
+print("\n--- Model 3: Topic Probabilities → Returns ---")
+print(model3.summary().tables[1])
+
+# Model 4: Full model (sentiment + topics)
+model4 = smf.ols(
+    "monthly_return ~ vader_mean + pct_negative + topic_1_mean + topic_2_mean + topic_3_mean + topic_4_mean + topic_5_mean",
+    merged
+).fit()
+print("\n--- Model 4: Full Model (Sentiment + Topics) → Returns ---")
+print(model4.summary().tables[1])
+print(f"  R-squared: {model4.rsquared:.4f}")
+
+###############################################################################
+#  5.9  EARNINGS SURPRISE ANALYSIS
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  EARNINGS SURPRISE vs SENTIMENT")
+print("=" * 60)
+
+# Add sector mapping to earnings
+sector_map = {
+    'AAPL': 'Technology', 'MSFT': 'Technology', 'GOOGL': 'Technology',
+    'META': 'Technology', 'NVDA': 'Technology',
+    'JPM': 'Finance', 'GS': 'Finance', 'BAC': 'Finance',
+    'JNJ': 'Healthcare', 'UNH': 'Healthcare',
+    'AMZN': 'Consumer', 'WMT': 'Consumer', 'KO': 'Consumer',
+    'CAT': 'Industrial', 'BA': 'Industrial'
+}
+
+# Get the surprisePercent column (from your EDA output)
+surprise_col = None
+for col in ['surprisePercent', 'surprise_pct', 'surprisepercentage']:
+    if col in earnings_surprises.columns:
+        surprise_col = col
+        break
+
+if surprise_col is None and 'actual' in earnings_surprises.columns:
+    earnings_surprises['surprise_pct'] = (
+        (earnings_surprises['actual'] - earnings_surprises['estimate'])
+        / earnings_surprises['estimate'].abs() * 100
+    )
+    surprise_col = 'surprise_pct'
+
+# Average sentiment by company (overall)
+company_sentiment = company_news.groupby('symbol').agg(
+    vader_mean=('vader_compound', 'mean'),
+    pct_negative=('vader_label', lambda x: (x == 'negative').mean()),
+    pct_positive=('vader_label', lambda x: (x == 'positive').mean()),
+    dominant_topic=('top_topic', lambda x: x.mode().iloc[0])
+).reset_index()
+
+# Average earnings surprise by company
+company_earnings = earnings_surprises.groupby('symbol').agg(
+    avg_surprise=(surprise_col, 'mean')
+).reset_index()
+
+# Merge
+earnings_sentiment = company_sentiment.merge(company_earnings, on='symbol', how='inner')
+earnings_sentiment['sector'] = earnings_sentiment['symbol'].map(sector_map)
+
+print(earnings_sentiment[['symbol', 'sector', 'vader_mean', 'pct_negative',
+                           'avg_surprise', 'dominant_topic']].to_string())
+
+# Scatter: Sentiment vs Earnings Surprise
+fig, ax = plt.subplots(figsize=(10, 6))
+scatter = ax.scatter(
+    earnings_sentiment['vader_mean'],
+    earnings_sentiment['avg_surprise'],
+    s=100, c=earnings_sentiment['dominant_topic'], cmap='Set1',
+    edgecolors='black', linewidth=0.5
+)
+for _, row in earnings_sentiment.iterrows():
+    ax.annotate(row['symbol'], (row['vader_mean'], row['avg_surprise']),
+                fontsize=9, ha='left', va='bottom')
+ax.set_xlabel('Average VADER Sentiment')
+ax.set_ylabel('Average Earnings Surprise %')
+ax.set_title('News Sentiment vs Earnings Surprise by Company', fontsize=14)
+ax.axhline(y=0, color='red', linestyle='--', alpha=0.3)
+plt.colorbar(scatter, label='Dominant Topic')
+plt.tight_layout()
+plt.show()
+
+# OLS: Sentiment → Earnings Surprise
+if len(earnings_sentiment) >= 10:
+    es_model = smf.ols("avg_surprise ~ vader_mean + pct_negative", earnings_sentiment).fit()
+    print("\n--- OLS: Sentiment → Earnings Surprise ---")
+    print(es_model.summary().tables[1])
+    print(f"  R-squared: {es_model.rsquared:.4f}")
+
+###############################################################################
+#  5.10  SENTIMENT AROUND EARNINGS DATES
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  SENTIMENT AROUND EARNINGS DATES")
+print("=" * 60)
+
+# Check if earnings has a period/date column
+if 'period' in earnings_surprises.columns:
+    earnings_surprises['earnings_date'] = pd.to_datetime(
+        earnings_surprises['period'], errors='coerce'
+    )
+
+    # For each earnings event, get sentiment in the 30 days before
+    pre_earnings_sentiment = []
+
+    for _, earn_row in earnings_surprises.iterrows():
+        if pd.isna(earn_row['earnings_date']):
+            continue
+        ticker = earn_row['symbol']
+        earn_date = earn_row['earnings_date']
+        window_start = earn_date - pd.Timedelta(days=30)
+
+        window_news = company_news[
+            (company_news['symbol'] == ticker) &
+            (company_news['date'] >= window_start) &
+            (company_news['date'] <= earn_date)
+        ]
+
+        if len(window_news) > 0:
+            pre_earnings_sentiment.append({
+                'symbol': ticker,
+                'earnings_date': earn_date,
+                'surprise': earn_row[surprise_col],
+                'pre_vader_mean': window_news['vader_compound'].mean(),
+                'pre_pct_negative': (window_news['vader_label'] == 'negative').mean(),
+                'pre_article_count': len(window_news),
+                'quarter': earn_row.get('quarter', np.nan)
+            })
+
+    if pre_earnings_sentiment:
+        pre_earn_df = pd.DataFrame(pre_earnings_sentiment)
+        print(pre_earn_df.to_string())
+
+        # Correlation
+        corr = pre_earn_df['pre_vader_mean'].corr(pre_earn_df['surprise'])
+        print(f"\nCorrelation (pre-earnings sentiment vs surprise): {corr:.4f}")
+
+        # Scatter
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.scatter(pre_earn_df['pre_vader_mean'], pre_earn_df['surprise'],
+                   s=80, color='steelblue', edgecolors='black')
+        for _, row in pre_earn_df.iterrows():
+            ax.annotate(f"{row['symbol']}", (row['pre_vader_mean'], row['surprise']),
+                        fontsize=8)
+        ax.set_xlabel('Pre-Earnings VADER Sentiment (30-day avg)')
+        ax.set_ylabel('Earnings Surprise %')
+        ax.set_title('Pre-Earnings Sentiment vs Actual Surprise', fontsize=14)
+        ax.axhline(y=0, color='red', linestyle='--', alpha=0.3)
+        plt.tight_layout()
+        plt.show()
+
+###############################################################################
+#  PART 5 COMPLETE
+###############################################################################
+
+print("\n" + "=" * 60)
+print("  PART 5 COMPLETE")
+print("=" * 60)
+print(f"""
+  Analyses completed:
+    - Stock returns calculated (daily, weekly, monthly)
+    - Monthly sentiment aggregated and merged with returns
+    - Correlation matrix: sentiment, topics, returns
+    - OLS regressions:
+        Model 1: VADER → returns
+        Model 2: Multiple sentiment → returns
+        Model 3: Topic probabilities → returns
+        Model 4: Full model (sentiment + topics) → returns
+    - Earnings surprise vs sentiment analysis
+    - Pre-earnings sentiment window analysis
+  
+  NEXT STEP → Part 6: Final Summary & Conclusions
+""")
+```
+
+
+Conclusion
+
+
+```{python}
+###############################################################################
+#  PART 6: FINAL SUMMARY & CONCLUSIONS
+###############################################################################
+#
+#  This part:
+#    1. Summarizes all key findings from Parts 1-5
+#    2. Creates polished visualizations for the final report
+#    3. Prints a structured conclusion
+#
+#  Continues from Parts 2-5. All dataframes in memory.
+#
+###############################################################################
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib.gridspec import GridSpec
+
+sns.set_style("whitegrid")
+plt.rcParams['figure.figsize'] = (14, 7)
+plt.rcParams['font.size'] = 11
+
+###############################################################################
+#  6.1  EXECUTIVE DASHBOARD — 4-PANEL SUMMARY FIGURE
+###############################################################################
+
+fig = plt.figure(figsize=(18, 14))
+gs = GridSpec(2, 2, figure=fig, hspace=0.35, wspace=0.3)
+
+# --- Panel 1: Sentiment by Company ---
+ax1 = fig.add_subplot(gs[0, 0])
+sent_by_company = company_news.groupby('symbol')['vader_compound'].mean().sort_values()
+colors = ['#d32f2f' if x < 0.09 else '#388e3c' if x > 0.12 else '#1976d2'
+          for x in sent_by_company.values]
+ax1.barh(sent_by_company.index, sent_by_company.values, color=colors)
+ax1.set_xlabel('Average VADER Compound')
+ax1.set_title('A. Average Headline Sentiment by Company', fontsize=13, fontweight='bold')
+ax1.axvline(x=sent_by_company.mean(), color='black', linestyle='--', alpha=0.5,
+            label=f'Mean: {sent_by_company.mean():.3f}')
+ax1.legend(fontsize=9)
+
+# --- Panel 2: Topic Distribution (Pie) ---
+ax2 = fig.add_subplot(gs[0, 1])
+topic_counts = company_news['top_topic'].value_counts().sort_index()
+topic_labels = [
+    'T0: Corporate/Retail\n(johnson, walmart, amazon)',
+    'T1: Political/Trade\n(trump, boeing, tariff)',
+    'T2: Market/Trading\n(earnings, dow, wall st)',
+    'T3: Banking/Investment\n(dividend, bank, fund)',
+    'T4: Big Tech/AI\n(nvidia, meta, apple)'
+]
+topic_colors = ['#42a5f5', '#ef5350', '#66bb6a', '#ffa726', '#ab47bc']
+wedges, texts, autotexts = ax2.pie(
+    topic_counts.values, labels=topic_labels, autopct='%1.1f%%',
+    colors=topic_colors, startangle=90, textprops={'fontsize': 9}
+)
+ax2.set_title('B. Topic Distribution Across All Articles', fontsize=13, fontweight='bold')
+
+# --- Panel 3: Sentiment Over Time ---
+ax3 = fig.add_subplot(gs[1, 0])
+company_news_main = company_news[company_news['date'] >= '2025-03-01'].copy()
+monthly_sent = company_news_main.groupby(
+    company_news_main['date'].dt.to_period('M')
+)['vader_compound'].mean()
+monthly_sent.index = monthly_sent.index.astype(str)
+ax3.plot(monthly_sent.index, monthly_sent.values, marker='o', color='#1976d2',
+         linewidth=2, markersize=8)
+ax3.fill_between(monthly_sent.index, monthly_sent.values, alpha=0.15, color='#1976d2')
+ax3.axhline(y=0, color='red', linestyle='--', alpha=0.3)
+ax3.set_xlabel('Month')
+ax3.set_ylabel('Avg VADER Compound')
+ax3.set_title('C. Monthly Headline Sentiment Trend (2025-2026)', fontsize=13, fontweight='bold')
+ax3.tick_params(axis='x', rotation=45)
+
+# --- Panel 4: Sentiment vs Earnings Surprise ---
+ax4 = fig.add_subplot(gs[1, 1])
+
+# Rebuild earnings_sentiment for this plot
+sector_map = {
+    'AAPL': 'Technology', 'MSFT': 'Technology', 'GOOGL': 'Technology',
+    'META': 'Technology', 'NVDA': 'Technology',
+    'JPM': 'Finance', 'GS': 'Finance', 'BAC': 'Finance',
+    'JNJ': 'Healthcare', 'UNH': 'Healthcare',
+    'AMZN': 'Consumer', 'WMT': 'Consumer', 'KO': 'Consumer',
+    'CAT': 'Industrial', 'BA': 'Industrial'
+}
+sector_colors = {
+    'Technology': '#ab47bc', 'Finance': '#42a5f5', 'Healthcare': '#ef5350',
+    'Consumer': '#66bb6a', 'Industrial': '#ffa726'
+}
+
+company_sent = company_news.groupby('symbol')['vader_compound'].mean().reset_index()
+company_sent.columns = ['symbol', 'vader_mean']
+
+surprise_col = None
+for col in ['surprisePercent', 'surprise_pct', 'surprisepercentage']:
+    if col in earnings_surprises.columns:
+        surprise_col = col
+        break
+if surprise_col is None:
+    earnings_surprises['surprise_pct'] = (
+        (earnings_surprises['actual'] - earnings_surprises['estimate'])
+        / earnings_surprises['estimate'].abs() * 100
+    )
+    surprise_col = 'surprise_pct'
+
+company_earn = earnings_surprises.groupby('symbol')[surprise_col].mean().reset_index()
+company_earn.columns = ['symbol', 'avg_surprise']
+
+plot_df = company_sent.merge(company_earn, on='symbol')
+plot_df['sector'] = plot_df['symbol'].map(sector_map)
+
+for sector in plot_df['sector'].unique():
+    subset = plot_df[plot_df['sector'] == sector]
+    ax4.scatter(subset['vader_mean'], subset['avg_surprise'], s=120,
+                color=sector_colors[sector], edgecolors='black', linewidth=0.5,
+                label=sector, zorder=5)
+
+for _, row in plot_df.iterrows():
+    ax4.annotate(row['symbol'], (row['vader_mean'], row['avg_surprise']),
+                 fontsize=8, ha='left', va='bottom')
+
+ax4.set_xlabel('Average VADER Sentiment')
+ax4.set_ylabel('Average Earnings Surprise %')
+ax4.set_title('D. News Sentiment vs Earnings Surprise', fontsize=13, fontweight='bold')
+ax4.axhline(y=0, color='red', linestyle='--', alpha=0.3)
+ax4.legend(fontsize=9, loc='lower right')
+
+plt.suptitle('Finnhub Financial News Analysis: Executive Summary',
+             fontsize=16, fontweight='bold', y=1.01)
+plt.tight_layout()
+plt.savefig('executive_dashboard.png', dpi=200, bbox_inches='tight')
+plt.show()
+
+###############################################################################
+#  6.2  TOPIC-SECTOR HEATMAP (POLISHED)
+###############################################################################
+
+fig, ax = plt.subplots(figsize=(12, 6))
+
+topic_by_sector = company_news.groupby('sector')['top_topic'].value_counts(
+    normalize=True
+).unstack(fill_value=0).round(3)
+
+topic_labels_short = [
+    'T0: Corporate\n/Retail',
+    'T1: Political\n/Trade',
+    'T2: Market\n/Trading',
+    'T3: Banking\n/Investment',
+    'T4: Big Tech\n/AI'
+]
+
+sns.heatmap(
+    topic_by_sector, annot=True, fmt='.1%', cmap='YlOrRd',
+    xticklabels=topic_labels_short, ax=ax,
+    cbar_kws={'label': 'Proportion of Articles'}
+)
+ax.set_title('Topic Distribution Across Industry Sectors', fontsize=14, fontweight='bold')
+ax.set_ylabel('Sector')
+ax.set_xlabel('')
+plt.tight_layout()
+plt.savefig('topic_sector_heatmap.png', dpi=200, bbox_inches='tight')
+plt.show()
+
+###############################################################################
+#  6.3  TOPIC TRENDS WITH OLS LINES (POLISHED)
+###############################################################################
+
+fig, ax = plt.subplots(figsize=(14, 7))
+
+topic_labels_full = [
+    'T0: Corporate/Retail', 'T1: Political/Trade', 'T2: Market/Trading',
+    'T3: Banking/Investment', 'T4: Big Tech/AI'
+]
+
+company_news_main['month_num'] = (
+    company_news_main['date'].dt.year * 12 + company_news_main['date'].dt.month
+)
+min_month = company_news_main['month_num'].min()
+company_news_main['month_index'] = company_news_main['month_num'] - min_month
+
+for i in range(5):
+    monthly_topic = company_news_main.groupby('month_index')[f'topic_{i+1}'].mean()
+    ax.scatter(monthly_topic.index, monthly_topic.values, s=40,
+               color=topic_colors[i], alpha=0.7)
+    # OLS trend line
+    z = np.polyfit(monthly_topic.index, monthly_topic.values, 1)
+    p = np.poly1d(z)
+    x_line = np.linspace(monthly_topic.index.min(), monthly_topic.index.max(), 100)
+    direction = "↑" if z[0] > 0 else "↓"
+    ax.plot(x_line, p(x_line), color=topic_colors[i], linewidth=2.5,
+            label=f'{topic_labels_full[i]} {direction}')
+
+ax.set_xlabel('Month Index (0 = March 2025)')
+ax.set_ylabel('Average Topic Probability')
+ax.set_title('Topic Probability Trends Over Time (with OLS Fit)', fontsize=14, fontweight='bold')
+ax.legend(loc='best', fontsize=9)
+plt.tight_layout()
+plt.savefig('topic_trends_ols.png', dpi=200, bbox_inches='tight')
+plt.show()
+
+###############################################################################
+#  6.4  CORRELATION HIGHLIGHT CHART
+###############################################################################
+
+fig, ax = plt.subplots(figsize=(10, 6))
+
+# Key correlations with monthly return from Part 5
+# Using the values from the correlation matrix
+key_corrs = {
+    'Topic 4\n(Banking/Invest)': 0.90,
+    'Topic 2\n(Earnings/Trading)': 0.84,
+    '% Positive\nHeadlines': 0.82,
+    'VADER\nSentiment': 0.51,
+    'Volatility': -0.51,
+    'Topic 5\n(Big Tech/AI)': -0.67,
+    'Topic 1\n(Political/Trade)': -0.67,
+    'Topic 3\n(Market/Wall St)': -0.83
+}
+
+labels = list(key_corrs.keys())
+values = list(key_corrs.values())
+colors = ['#388e3c' if v > 0 else '#d32f2f' for v in values]
+
+bars = ax.barh(labels, values, color=colors, edgecolor='black', linewidth=0.5)
+ax.set_xlabel('Correlation with Monthly Stock Return')
+ax.set_title('Key Correlations: News Features vs Stock Returns', fontsize=14, fontweight='bold')
+ax.axvline(x=0, color='black', linewidth=0.8)
+ax.set_xlim(-1, 1)
+
+# Add value labels
+for bar, val in zip(bars, values):
+    ax.text(val + (0.03 if val > 0 else -0.03), bar.get_y() + bar.get_height()/2,
+            f'{val:.2f}', va='center', ha='left' if val > 0 else 'right',
+            fontsize=10, fontweight='bold')
+
+plt.tight_layout()
+plt.savefig('correlation_highlights.png', dpi=200, bbox_inches='tight')
+plt.show()
+
+###############################################################################
+#  6.5  PRINT FINAL CONCLUSIONS
+###############################################################################
+
+print("\n" + "=" * 70)
+print("  FINNHUB FINANCIAL NEWS ANALYSIS — FINAL CONCLUSIONS")
+print("=" * 70)
+
+print("""
+PROJECT OVERVIEW
+━━━━━━━━━━━━━━━
+Analyzed 40,112 news articles from Finnhub API covering 15 major companies
+across 5 sectors (Technology, Finance, Healthcare, Consumer, Industrial)
+over a 12-month period (March 2025 – February 2026).
+
+Applied NLP techniques: VADER sentiment analysis, TextBlob polarity,
+LDA topic modeling, TF-IDF analysis, and OLS regression to examine
+relationships between news content and market outcomes.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+KEY FINDING 1: SENTIMENT LANDSCAPE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Overall headline sentiment skews slightly positive (mean VADER: 0.105)
+• 42.6% neutral, 39.9% positive, 17.4% negative
+• Amazon has the most positive coverage (0.146), Apple the least (0.073)
+• Consumer sector leads in sentiment (0.125), Finance trails (0.093)
+• VADER and TextBlob show moderate agreement (r = 0.37), confirming that
+  context-aware scoring (VADER) captures nuances that word-level tools miss
+
+KEY FINDING 2: TOPIC STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• LDA identified 5 distinct topics that map cleanly to business domains:
+    T0: Corporate/Retail (johnson, walmart, amazon) — 15.5%
+    T1: Political/Trade (trump, boeing, tariff)    — 16.5%
+    T2: Market/Trading (earnings, dow, wall st)    — 23.2%
+    T3: Banking/Investment (dividend, bank, fund)  — 24.8%
+    T4: Big Tech/AI (nvidia, meta, apple)          — 20.1%
+• Topics align with sectors: Boeing → 56% Topic 1, NVDA → 48% Topic 4,
+  Goldman Sachs → 36% Topic 3
+• Topic trends over time are statistically significant (p < 0.001):
+    - Earnings/Market news (T2) increasing over the year
+    - Political/Trade news (T1) decreasing
+    - Big Tech/AI (T4) increasing (AI narrative growth)
+
+KEY FINDING 3: MARKET IMPACT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Strong correlations between news features and stock returns:
+    - Banking/Investment topic probability → returns (r = 0.90)
+    - Earnings/Trading topic → returns (r = 0.84)
+    - % positive headlines → returns (r = 0.82)
+    - Political/Trade topic → returns (r = -0.67)
+• Higher volatility negatively correlated with returns (r = -0.51)
+• Simple VADER → returns OLS shows positive coefficient (0.045) but
+  limited statistical power due to small monthly sample size
+
+KEY FINDING 4: EARNINGS SURPRISE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Boeing is the major outlier: lowest sentiment + worst earnings surprise (-38%)
+• Amazon shows highest sentiment + highest surprise (14.6%)
+• Pre-earnings 30-day sentiment window shows weak predictive power (r = -0.09)
+  suggesting news sentiment is reactive rather than predictive of earnings
+• Most companies beat estimates (positive surprise), consistent with the known
+  "lowball estimate" phenomenon in analyst forecasts
+
+KEY FINDING 5: TF-IDF INSIGHTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• TF-IDF correctly identifies sector-specific vocabulary:
+    - Technology: chip, gpu, ai, intelligence, cloud
+    - Finance: dividend, loan, banking, portfolio
+    - Healthcare: drug, patient, fda, clinical
+    - Consumer: sugar, beverage, retail, delivery
+    - Industrial: aircraft, defense, construction
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+LIMITATIONS & FUTURE WORK
+━━━━━━━━━━━━━━━━━━━━━━━━━
+• Monthly aggregation reduces sample size for OLS (only ~12 months)
+  → Weekly aggregation could improve statistical power
+• VADER/TextBlob are general-purpose tools; finance-specific models
+  like FinBERT could improve sentiment accuracy
+• Finnhub free tier limits prevented access to:
+  - Earnings call transcripts (premium endpoint)
+  - News sentiment scores (pre-computed by Finnhub)
+  - Insider sentiment data (mostly empty)
+• Causality cannot be established — correlations could reflect
+  reverse causation (good returns → positive news coverage)
+• Topic model with 5 topics is one choice; coherence optimization
+  could identify the optimal number
+
+TOOLS & TECHNIQUES USED
+━━━━━━━━━━━━━━━━━━━━━━━
+• Data Collection: Finnhub API (v4 pipeline)
+• Text Preprocessing: regex, NLTK stopwords, WordNet lemmatization
+• Sentiment Analysis: VADER, TextBlob
+• Topic Modeling: LDA (lda package + CountVectorizer)
+• Feature Analysis: TF-IDF (sklearn TfidfVectorizer)
+• Statistical Modeling: OLS regression, Mixed Effects Model (statsmodels)
+• Visualization: matplotlib, seaborn
+""")
+
+print("=" * 70)
+print("  PROJECT COMPLETE")
+print("=" * 70)
+print(f"""
+  Total Articles Analyzed:  {len(company_news):,}
+  Companies:                15
+  Sectors:                  5
+  Date Range:               March 2025 – February 2026
+  Topics Identified:        5
+  Sentiment Models:         2 (VADER, TextBlob)
+  OLS Regressions:          6+ models
+  Visualizations:           20+ charts
+""")
+
+```
