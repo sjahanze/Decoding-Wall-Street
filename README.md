@@ -1,7 +1,7 @@
 # Decoding Wall Street
 
 **What 40,000 financial news headlines reveal about market sentiment, media narratives, and stock returns.**
-
+[View Live Dashboard](https://sjahanze.github.io/Decoding-Wall-Street/)
 ---
 
 I started this project with a simple question: does the *language* of financial news tell us something the numbers alone cannot?
