@@ -119,30 +119,6 @@ Four polished visualizations synthesizing the full analysis: an executive dashbo
 
 **3. News reacts, it doesn't predict.** Pre-earnings sentiment has near-zero predictive power (r = −0.09). Markets are efficient. The earnings surprise is truly surprising.
 
----
-
-## Repository Structure
-
-```
-├── data/
-│   ├── basic_financials.csv
-│   ├── company_news.csv
-│   ├── company_news_cleaned.csv
-│   ├── earnings_surprises.csv
-│   ├── general_market_news.csv
-│   ├── insider_sentiment.csv
-│   └── stock_prices.csv
-│
-├── notebooks/
-│   └── Final Project.qmd            # Full analysis (Quarto notebook)
-│
-├── figures/                          # All generated charts and plots
-├── index.html                        # Interactive project dashboard
-└── README.md
-```
-
----
-
 ## Tools
 
 `Python` · `Finnhub API` · `NLTK` · `VADER` · `TextBlob` · `scikit-learn` · `statsmodels` · `pandas` · `seaborn` · `matplotlib` · `LDA` · `TF-IDF` · `OLS Regression` · `Mixed Effects Models`
