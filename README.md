@@ -136,5 +136,3 @@ If I were extending this, three things:
 **Real-time pipeline.** The Finnhub API supports streaming. A production version of this could score incoming headlines in real-time and flag when a company's topic distribution shifts abnormally — that's where the alpha might be.
 
 ---
-
-*Unstructured Data Analytics · Spring 2026 · Mendoza College of Business · University of Notre Dame*
